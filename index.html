@@ -1,0 +1,150 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Red Cube Route Rush</title>
+  <style>
+    :root { --ink:#111827; --muted:#4b5563; --panel:#f3f4f6; --edge:#d1d5db; --wall:#374151; --tool:#e5e7eb; }
+    * { box-sizing:border-box; }
+    body {
+      margin:0; min-height:100vh; font-family:"Segoe UI",Tahoma,sans-serif; color:var(--ink);
+      background:radial-gradient(circle at 12% 10%,#334155 0%,#1f2937 35%,#0f172a 100%);
+      display:flex; justify-content:center; align-items:flex-start; padding:16px;
+    }
+    .app { position:relative; width:min(1400px,100%); background:var(--panel); border:1px solid var(--edge); border-radius:14px; overflow:hidden; box-shadow:0 20px 40px rgba(0,0,0,.35); }
+    .app.theme-dark { --ink:#e2e8f0; --muted:#cbd5e1; --panel:#0f172a; --edge:#334155; --wall:#94a3b8; --tool:#1e293b; }
+    .top { display:flex; flex-wrap:wrap; gap:10px; justify-content:space-between; align-items:center; padding:12px 14px; border-bottom:1px solid var(--edge); background:linear-gradient(135deg,#fff,#f3f4f6,#e5e7eb); }
+    .app.theme-dark .top { background:linear-gradient(135deg,#0b1220,#111827,#1f2937); }
+    .title { font-weight:800; color:#991b1b; }
+    .app.theme-dark .title { color:#f87171; }
+    .stats { display:flex; gap:12px; flex-wrap:wrap; color:var(--muted); font-size:14px; font-weight:600; }
+    .app.theme-dark .stats { color:#dbeafe; }
+    .layout { display:grid; grid-template-columns:1fr 330px; gap:12px; padding:12px; }
+    .canvas-wrap { background:#e5e7eb; border:1px solid var(--edge); border-radius:10px; padding:8px; overflow:auto; }
+    .app.theme-dark .canvas-wrap { background:#0b1220; }
+    canvas { width:100%; height:auto; display:block; border:1px solid #6b7280; border-radius:8px; background:linear-gradient(180deg,#9ca3af,#d1d5db); }
+    .app.theme-dark canvas { border-color:#475569; background:linear-gradient(180deg,#0f172a,#0b1220); }
+    .side { display:grid; gap:10px; align-content:start; max-height:calc(100vh - 90px); overflow:auto; padding-right:4px; }
+    .card { border:1px solid var(--edge); background:#fff; border-radius:10px; padding:10px; display:grid; gap:8px; }
+    .app.theme-dark .card { background:#111827; }
+    .card h3 { margin:0; font-size:14px; text-transform:uppercase; letter-spacing:.3px; }
+    .app.theme-dark .card h3 { color:#f1f5f9; }
+    .tool-grid { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+    .row { display:grid; grid-template-columns:1fr 1fr; gap:6px; }
+    .levels { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; }
+    .btn,.lv { border:1px solid #9ca3af; background:var(--tool); border-radius:8px; padding:8px; cursor:pointer; font-weight:700; font-size:13px; }
+    .app.theme-dark .btn,.app.theme-dark .lv { color:#e2e8f0; border-color:#475569; }
+    .btn:hover,.lv:hover { transform:translateY(-1px); background:#d1d5db; }
+    .app.theme-dark .btn:hover,.app.theme-dark .lv:hover { background:#334155; }
+    .btn.active { background:#0ea5e9; color:#fff; border-color:#0369a1; }
+    .btn.primary { background:#15803d; color:#fff; border-color:#166534; }
+    .btn.warn { background:#b91c1c; color:#fff; border-color:#7f1d1d; }
+    .btn.gray { background:#374151; color:#fff; border-color:#111827; }
+    .lv { font-size:12px; text-align:center; padding:7px 4px; font-weight:800; }
+    .lv.locked { opacity:.45; cursor:not-allowed; }
+    .lv.current { outline:2px solid #ef4444; background:#fee2e2; }
+    .lv.cleared { background:#dcfce7; border-color:#16a34a; }
+    .app.theme-dark .lv.current { background:#7f1d1d; color:#fee2e2; }
+    .app.theme-dark .lv.cleared { background:#14532d; color:#dcfce7; border-color:#22c55e; }
+    .app.theme-dark .lv.locked { color:#94a3b8; }
+    .status { font-size:13px; color:#374151; min-height:36px; line-height:1.35; }
+    .app.theme-dark .status, .app.theme-dark .events, .app.theme-dark .hint { color:#cbd5e1; }
+    .mono { font-family:Consolas,monospace; font-size:12px; white-space:pre-wrap; padding:8px; border:1px solid #e5e7eb; border-radius:8px; background:#f9fafb; }
+    .app.theme-dark .mono { background:#0b1220; border-color:#334155; color:#dbeafe; }
+    .events { margin:0; padding-left:18px; font-size:12px; color:#374151; min-height:40px; }
+    .hint { font-size:12px; color:#4b5563; line-height:1.35; }
+    .app.theme-dark #themeState { color:#e2e8f0; }
+    .menu {
+      position:absolute; inset:0; z-index:10; display:flex; align-items:center; justify-content:center;
+      background:linear-gradient(165deg,rgba(15,23,42,.86),rgba(31,41,55,.9));
+    }
+    .menu.hidden { display:none; }
+    .menu-card {
+      width:min(720px,92%); color:#f8fafc; border:1px solid rgba(255,255,255,.2); border-radius:14px;
+      background:linear-gradient(135deg,rgba(17,24,39,.95),rgba(51,65,85,.95)); padding:18px; display:grid; gap:10px;
+      box-shadow:0 16px 32px rgba(0,0,0,.35);
+    }
+    .menu-card h2 { margin:0; font-size:28px; }
+    .menu-card p { margin:0; color:#dbeafe; line-height:1.4; font-size:14px; }
+    .menu-split { display:grid; grid-template-columns:1.15fr .85fr; gap:12px; align-items:start; }
+    .menu-panel { border:1px solid rgba(148,163,184,.35); border-radius:10px; background:rgba(15,23,42,.35); padding:10px; display:grid; gap:8px; }
+    .menu-panel h3 { margin:0; font-size:14px; text-transform:uppercase; letter-spacing:.4px; color:#bae6fd; }
+    .menu-list { margin:0; padding-left:18px; display:grid; gap:4px; font-size:13px; color:#e5e7eb; }
+    .menu-btn {
+      justify-self:start; border:1px solid #22c55e; color:#052e16; background:#86efac; border-radius:8px;
+      font-weight:800; padding:9px 12px; cursor:pointer;
+    }
+    .menu-btn:hover { background:#4ade80; }
+    .menu-actions { display:flex; gap:10px; flex-wrap:wrap; }
+    .menu-btn.alt { border-color:#38bdf8; color:#082f49; background:#bae6fd; }
+    .menu-btn.alt:hover { background:#7dd3fc; }
+    .menu-switch { display:flex; gap:8px; align-items:center; font-weight:700; color:#f8fafc; font-size:14px; }
+    .menu-switch input { width:18px; height:18px; }
+    .tool-btn { display:flex; align-items:center; justify-content:flex-start; gap:8px; }
+    .tool-icon { width:18px; text-align:center; font-size:14px; line-height:1; }
+    @media (max-width:840px) { .menu-split { grid-template-columns:1fr; } }
+    @media (max-width:1150px) { .layout { grid-template-columns:1fr; } .side { max-height:none; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div class="menu" id="menuOverlay">
+      <div class="menu-card">
+        <h2>Red Cube Route Rush</h2>
+        <p>Build your red cube inside the 9x9 setup grid, then survive level mode or score mode hazards and enemies.</p>
+        <div class="menu-split">
+          <section class="menu-panel">
+            <h3>Game Modes</h3>
+            <ul class="menu-list">
+              <li>Only movement cubes can be attached directly next to the red cube.</li>
+              <li>Special cubes (rocket/piston/stabilizer/gun) attach onto existing side modules.</li>
+              <li>Lasers and enemies can break attachments one-by-one.</li>
+              <li>Reach the goal cube for 5 seconds in Levels, or survive and score in Score Mode.</li>
+            </ul>
+            <div class="menu-actions">
+              <button class="menu-btn" id="startGameBtn">Start Level Mode</button>
+              <button class="menu-btn alt" id="startScoreBtn">Start Score Mode</button>
+            </div>
+          </section>
+          <section class="menu-panel">
+            <h3>Settings</h3>
+            <label class="menu-switch">
+              <input type="checkbox" id="darkThemeToggle" />
+              <span>Dark Theme</span>
+            </label>
+            <p id="themeState">Dark theme OFF</p>
+            <p>Dark theme uses a darker battlefield and lighter walls for stronger contrast.</p>
+          </section>
+        </div>
+      </div>
+    </div>
+    <div class="top">
+      <div class="title" id="gameTitle">Red Cube Route Rush (20 Levels)</div>
+      <div class="stats">
+        <span id="phaseText">Phase: Build</span>
+        <span id="levelText">Level: 1 / 20</span>
+        <span id="goalText">Goal Hold: 0.0 / 5.0s</span>
+        <span id="speedText">Speed: 0.00</span>
+        <span id="updateText">Update: 1.0.01</span>
+      </div>
+    </div>
+    <div class="layout">
+      <div class="canvas-wrap"><canvas id="gameCanvas" width="1200" height="480"></canvas></div>
+      <aside class="side">
+        <section class="card"><h3>Setup Tools</h3><div class="tool-grid" id="toolGrid"></div><div class="status" id="toolStatus"></div></section>
+        <section class="card">
+          <h3>Level Flow</h3>
+          <div class="row"><button class="btn primary" id="startRunBtn">Start Run</button><button class="btn warn" id="backToBuildBtn">Back To Build</button></div>
+          <div class="row"><button class="btn gray" id="restartBtn">Restart</button><button class="btn" id="nextLevelBtn">Next Level</button></div>
+          <div class="hint">Run controls: Arrow keys/WASD move, G fire guns, Space piston burst, Shift ignite rockets, Q/E/F/V directional pistons, C stabilizer pulse, R restart.</div>
+        </section>
+        <section class="card"><h3>Attachments</h3><div class="mono" id="attachmentReadout">No cube placed yet.</div><div class="hint">Controls and modules can only be attached in cells directly next to the red cube.</div></section>
+        <section class="card"><h3>Levels</h3><div class="levels" id="levelButtons"></div></section>
+        <section class="card"><h3>Event Log</h3><ul class="events" id="eventLog"></ul></section>
+      </aside>
+    </div>
+  </div>
+  <script src="game.js"></script>
+</body>
+</html>
