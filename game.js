@@ -19,6 +19,7 @@ const BULLET_RANGE_TILES = 10;
 const MAX_YELLOW_MINI = 96;
 const MAX_RED_MINI = 56;
 const GREEN_CUBE_SPAWN_CHANCE = 0.1;
+const SCORE_100_COUNTS = { blue: 4, white: 4, yellow: 3 };
 
 const TOOLS = [
   ["place-player", "Place Cube"],
@@ -142,8 +143,10 @@ const S = {
   dropSpawnCd: 30,
   dropTelegraphs: [],
   yellow: [],
+  white: [],
   yellowMini: [],
   yellowSpawnCd: 4.5,
+  whiteSpawnCd: 0.8,
   scoreLaserWalls: [],
   scoreLaserCd: 2.8,
   redMini: [],
@@ -262,7 +265,7 @@ function scoreNoise(x, y) {
 function scoreWallAt(x, y) {
   if (inBuild(x, y)) return false;
   if (S.scoreWallsRemoved) return false;
-  const density = isScoreMode() && S.score >= 20 ? 0.06 : 0.1;
+  const density = isScoreMode() ? (S.score >= 100 ? 0.03 : S.score >= 20 ? 0.06 : 0.1) : 0.1;
   const mode = S.scoreSeed + ":" + density;
   if (S.scoreWallCacheMode !== mode) {
     S.scoreWallCacheMode = mode;
@@ -274,6 +277,37 @@ function scoreWallAt(x, y) {
   S.scoreWallCache.set(key, out);
   if (S.scoreWallCache.size > 20000) S.scoreWallCache.clear();
   return out;
+}
+
+function whiteCubeBaseHp() {
+  return S.score >= 200 ? 20 : 15;
+}
+
+function yellowFactoryBaseHp() {
+  return S.score >= 200 ? 40 : 15;
+}
+
+function scoreBossBaseHp() {
+  if (S.score >= 200) return 800;
+  if (S.score >= 100) return 500;
+  return 100;
+}
+
+function applyLateScoreTierStats() {
+  const whiteHp = whiteCubeBaseHp();
+  const yellowHp = yellowFactoryBaseHp();
+  for (const w of S.white) {
+    if (w.maxHp < whiteHp) {
+      w.maxHp = whiteHp;
+      w.hp = Math.min(w.maxHp, Math.max(w.hp, whiteHp));
+    }
+  }
+  for (const y of S.yellow) {
+    if (y.maxHp < yellowHp) {
+      y.maxHp = yellowHp;
+      y.hp = Math.min(y.maxHp, Math.max(y.hp, yellowHp));
+    }
+  }
 }
 
 function cellOpen(l, x, y) {
@@ -572,6 +606,7 @@ function startScoreMode() {
   S.boss = null;
   S.enemyBullets = [];
   S.yellow = [];
+  S.white = [];
   S.yellowMini = [];
   S.redMini = [];
   S.redMiniSpawnTick = 0;
@@ -579,6 +614,7 @@ function startScoreMode() {
   S.scoreLaserWalls = [];
   S.scoreLaserCd = 2.8;
   S.yellowSpawnCd = 4.5;
+  S.whiteSpawnCd = 0.8;
   S.arena = generateScoreArena();
   ui.menu.classList.add("hidden");
   resetBuild();
@@ -763,10 +799,12 @@ function clearMotion() {
   S.swordAngle = 0;
   S.scoreLaserCd = 2.8;
   S.yellowSpawnCd = 4.5;
+  S.whiteSpawnCd = 0.8;
   S.dropSpawnCd = 30;
   S.dropTelegraphs = [];
   S.scoreLaserWalls = [];
   S.yellow = [];
+  S.white = [];
   S.yellowMini = [];
   S.redMini = [];
   S.redMiniSpawnTick = 0;
@@ -787,6 +825,7 @@ function resetBuild() {
   clearMotion();
   S.snap = null;
   S.enemy = [];
+  S.white = [];
   S.spawners = [];
   S.boss = null;
   S.drops = [];
@@ -795,11 +834,13 @@ function resetBuild() {
   S.scoreLaserWalls = [];
   S.scoreLaserCd = 2.8;
   S.yellow = [];
+  S.white = [];
   S.yellowMini = [];
   S.redMini = [];
   S.redMiniSpawnTick = 0;
   S.greenCube = null;
   S.yellowSpawnCd = 4.5;
+  S.whiteSpawnCd = 0.8;
   S.swordCount = 0;
   S.previewSpawns = [];
   setMsg("Build in the " + buildGridLabel() + " setup grid. Movement modules must be adjacent to the red cube.");
@@ -851,6 +892,7 @@ function setupRunHazardsAndEnemies() {
     S.spawners = [];
     S.previewSpawns = [];
     S.enemy = [];
+    S.white = [];
     S.yellow = [];
     S.yellowMini = [];
     S.redMini = [];
@@ -863,6 +905,7 @@ function setupRunHazardsAndEnemies() {
     S.scoreLaserWalls = [];
     S.scoreLaserCd = 2.8;
     S.yellowSpawnCd = 4.5;
+    S.whiteSpawnCd = 0.8;
     S.scoreEnemySpawnCd = 0;
     if (Math.random() < GREEN_CUBE_SPAWN_CHANCE) spawnGreenCubeRandom();
     return;
@@ -900,7 +943,8 @@ function spawnEnemyFromSpawner(sp) {
     pickRapid: 0,
     pickAIGun: 0,
     pickFactory: 0,
-    pickSword: 0
+    pickSword: 0,
+    factoryCd: 1.2
   };
 }
 
@@ -927,6 +971,7 @@ function spawnScoreEnemyRandom() {
     const y = Math.floor(S.p.y + Math.sin(ang) * dist);
     if (solid(x, y) || (buildZoneBlocksRun() && inBuild(x, y))) continue;
     if (S.enemy.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) < 4)) continue;
+    if (S.white.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) < 4)) continue;
     if (S.yellow.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) < 4)) continue;
     if (S.yellowMini.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) < 3)) continue;
     S.enemy.push({
@@ -951,10 +996,49 @@ function spawnScoreEnemyRandom() {
       pickRapid: 0,
       pickAIGun: 0,
       pickFactory: 0,
-      pickSword: 0
+      pickSword: 0,
+      factoryCd: 1.2
     });
     return;
   }
+}
+
+function spawnWhiteCubeRandom() {
+  for (let at = 0; at < 170; at++) {
+    const ang = Math.random() * Math.PI * 2;
+    const dist = 8 + Math.random() * 12;
+    const x = Math.floor(S.p.x + Math.cos(ang) * dist);
+    const y = Math.floor(S.p.y + Math.sin(ang) * dist);
+    if (solid(x, y) || (buildZoneBlocksRun() && inBuild(x, y))) continue;
+    if (Math.hypot(x + 0.5 - S.p.x, y + 0.5 - S.p.y) < 6.4) continue;
+    if (S.enemy.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) < 4)) continue;
+    if (S.white.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) < 4)) continue;
+    if (S.yellow.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) < 5)) continue;
+    if (S.yellowMini.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) < 3)) continue;
+
+    const hp = whiteCubeBaseHp();
+    S.white.push({
+      x: x + 0.5,
+      y: y + 0.5,
+      vx: 0,
+      vy: 0,
+      size: 0.76,
+      hp,
+      maxHp: hp,
+      hitCd: 0,
+      shootCd: 0.24 + Math.random() * 0.24,
+      swordHitCd: 0,
+      lastX: x + 0.5,
+      lastY: y + 0.5,
+      stuckTime: 0,
+      repath: 0,
+      path: [],
+      targetKey: ""
+    });
+    pushEv("White blaster cube entered the map.");
+    return true;
+  }
+  return false;
 }
 
 function spawnYellowFactoryRandom() {
@@ -966,17 +1050,19 @@ function spawnYellowFactoryRandom() {
     if (solid(x, y) || (buildZoneBlocksRun() && inBuild(x, y))) continue;
     if (Math.hypot(x + 0.5 - S.p.x, y + 0.5 - S.p.y) < 7.5) continue;
     if (S.enemy.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) < 4)) continue;
+    if (S.white.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) < 4)) continue;
     if (S.yellow.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) < 5)) continue;
     if (S.yellowMini.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) < 3)) continue;
 
+    const hp = yellowFactoryBaseHp();
     S.yellow.push({
       x: x + 0.5,
       y: y + 0.5,
       vx: 0,
       vy: 0,
       size: 0.9,
-      hp: 15,
-      maxHp: 15,
+      hp,
+      maxHp: hp,
       hitCd: 0,
       swordHitCd: 0,
       spawnCd: 4,
@@ -1002,6 +1088,7 @@ function spawnGreenCubeRandom() {
     if (solid(x, y) || (buildZoneBlocksRun() && inBuild(x, y))) continue;
     if (Math.hypot(x + 0.5 - S.p.x, y + 0.5 - S.p.y) < 8) continue;
     if (S.enemy.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) < 5)) continue;
+    if (S.white.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) < 5)) continue;
     if (S.yellow.some((e) => Math.abs(e.x - x) + Math.abs(e.y - y) < 6)) continue;
 
     S.greenCube = {
@@ -1027,6 +1114,7 @@ function spawnYellowMiniFromFactory(fy) {
     const x = Math.floor(fy.x + Math.cos(ang) * dist);
     const y = Math.floor(fy.y + Math.sin(ang) * dist);
     if (solid(x, y) || (buildZoneBlocksRun() && inBuild(x, y))) continue;
+    if (S.white.some((m) => Math.abs(m.x - x) + Math.abs(m.y - y) < 2)) continue;
     if (S.yellowMini.some((m) => Math.abs(m.x - x) + Math.abs(m.y - y) < 2)) continue;
 
     S.yellowMini.push({
@@ -1076,7 +1164,33 @@ function relocateEnemyNearPlayer(e, minDist = 8, maxDist = 14) {
 function updateScoreEnemyPopulation(dt) {
   if (!isScoreMode()) return;
   if (S.boss) return;
+  if (S.score >= 100) {
+    while (S.enemy.length > SCORE_100_COUNTS.blue) S.enemy.pop();
+    while (S.white.length > SCORE_100_COUNTS.white) S.white.pop();
+    while (S.yellow.length > SCORE_100_COUNTS.yellow) S.yellow.pop();
+
+    S.scoreEnemySpawnCd -= dt;
+    S.whiteSpawnCd -= dt;
+    S.yellowSpawnCd -= dt;
+
+    if (S.enemy.length < SCORE_100_COUNTS.blue && S.scoreEnemySpawnCd <= 0) {
+      if (spawnScoreEnemyRandom()) S.scoreEnemySpawnCd = 0.55 + Math.random() * 0.55;
+      else S.scoreEnemySpawnCd = 0.2;
+    }
+    if (S.white.length < SCORE_100_COUNTS.white && S.whiteSpawnCd <= 0) {
+      if (spawnWhiteCubeRandom()) S.whiteSpawnCd = 0.5 + Math.random() * 0.45;
+      else S.whiteSpawnCd = 0.2;
+    }
+    if (S.yellow.length < SCORE_100_COUNTS.yellow && S.yellowSpawnCd <= 0) {
+      if (spawnYellowFactoryRandom()) S.yellowSpawnCd = 1.8 + Math.random() * 0.9;
+      else S.yellowSpawnCd = 0.25;
+    }
+    applyLateScoreTierStats();
+    return;
+  }
+
   if (S.score >= 20) {
+    while (S.white.length) S.white.pop();
     while (S.enemy.length > 3) S.enemy.pop();
     while (S.yellow.length > 2) S.yellow.pop();
 
@@ -1094,6 +1208,7 @@ function updateScoreEnemyPopulation(dt) {
     return;
   }
 
+  while (S.white.length) S.white.pop();
   S.scoreEnemySpawnCd -= dt;
   if (S.enemy.length < 5 && S.scoreEnemySpawnCd <= 0) {
     if (spawnScoreEnemyRandom()) S.scoreEnemySpawnCd = 0.75 + Math.random() * 0.85;
@@ -1108,6 +1223,21 @@ function addScore(points) {
   if (prev < 20 && S.score >= 20) {
     S.scoreEnemySpawnCd = 0;
     S.yellowSpawnCd = 0;
+  }
+  if (prev < 100 && S.score >= 100) {
+    S.scoreEnemySpawnCd = 0;
+    S.whiteSpawnCd = 0;
+    S.yellowSpawnCd = 0;
+    pushEv("Tier up: white blaster cubes joined the fight.");
+  }
+  if (prev < 200 && S.score >= 200) {
+    applyLateScoreTierStats();
+    S.whiteSpawnCd = 0;
+    if (S.boss && S.boss.maxHp < 800) {
+      S.boss.maxHp = 800;
+      S.boss.hp = Math.max(S.boss.hp, 800);
+    }
+    pushEv("Tier up: enemy attachment loadouts fully activated.");
   }
   if (S.score > S.bestScore) {
     S.bestScore = S.score;
@@ -1135,16 +1265,18 @@ function spawnBoss() {
       break;
     }
     S.enemy = [];
+    S.white = [];
     S.yellow = [];
     S.yellowMini = [];
+    const hp = scoreBossBaseHp();
     S.boss = {
       x: sx + 0.5,
       y: sy + 0.5,
       vx: 0,
       vy: 0,
       size: 2.2,
-      hp: 100,
-      maxHp: 100,
+      hp,
+      maxHp: hp,
       shootCd: 0.22,
       laserCd: 0.9,
       swordHitCd: 0,
@@ -1184,6 +1316,7 @@ function despawnBoss() {
     S.scoreLaserCd = 1.1;
     S.scoreEnemySpawnCd = 0;
     S.yellowSpawnCd = 1.2;
+    S.whiteSpawnCd = 0.8;
   }
   S.nextBossScore += 30;
   pushEv("Boss defeated.");
@@ -1483,6 +1616,15 @@ function destroyEnemyAt(index, reason = "Blue cube destroyed.") {
   addScore(1);
 }
 
+function destroyWhiteAt(index, reason = "White cube destroyed.") {
+  const e = S.white[index];
+  if (!e) return;
+  pushEv(reason);
+  spawnScoreDrop(e.x, e.y);
+  S.white.splice(index, 1);
+  addScore(1);
+}
+
 function destroyYellowAt(index, reason = "Yellow cube destroyed.") {
   const e = S.yellow[index];
   if (!e) return;
@@ -1524,6 +1666,7 @@ function ensureEnemyInventory(e) {
   if (!Number.isFinite(e.pickAIGun)) e.pickAIGun = 0;
   if (!Number.isFinite(e.pickFactory)) e.pickFactory = 0;
   if (!Number.isFinite(e.pickSword)) e.pickSword = 0;
+  if (!Number.isFinite(e.factoryCd)) e.factoryCd = 1.2;
 }
 
 function enemyPickupDrop(e, type) {
@@ -1615,6 +1758,13 @@ function updateAIGuns(dt) {
       if (d < best) {
         best = d;
         target = { x: e.x, y: e.y };
+      }
+    }
+    for (const w of S.white) {
+      const d = Math.hypot(w.x - a.x, w.y - a.y);
+      if (d < best) {
+        best = d;
+        target = { x: w.x, y: w.y };
       }
     }
     for (const y of S.yellow) {
@@ -1754,6 +1904,17 @@ function updateDropsAndSword(dt, prevX = S.p.x, prevY = S.p.y) {
     }
   }
 
+  for (let i = S.white.length - 1; i >= 0; i--) {
+    const e = S.white[i];
+    e.swordHitCd = Math.max(0, (e.swordHitCd || 0) - dt);
+    if (e.swordHitCd > 0) continue;
+    if (swordHitsEntity(e.x, e.y, e.size / 2, sword)) {
+      e.hp -= 2;
+      e.swordHitCd = 0.24;
+      if (e.hp <= 0) destroyWhiteAt(i, "White cube sliced.");
+    }
+  }
+
   for (let i = S.yellow.length - 1; i >= 0; i--) {
     const e = S.yellow[i];
     e.swordHitCd = Math.max(0, (e.swordHitCd || 0) - dt);
@@ -1832,6 +1993,19 @@ function updateGunBullets(dt) {
         }
         hitEnemy = true;
         break;
+      }
+    }
+
+    if (!hitEnemy) {
+      for (let wi = S.white.length - 1; wi >= 0; wi--) {
+        const e = S.white[wi];
+        const h = e.size / 2;
+        if (b.x >= e.x - h && b.x <= e.x + h && b.y >= e.y - h && b.y <= e.y + h) {
+          e.hp -= b.dmg;
+          if (e.hp <= 0) destroyWhiteAt(wi, "White cube destroyed.");
+          hitEnemy = true;
+          break;
+        }
       }
     }
 
@@ -1931,6 +2105,7 @@ function backBuild() {
   }
   clearMotion();
   S.enemy = [];
+  S.white = [];
   S.yellow = [];
   S.yellowMini = [];
   S.redMini = [];
@@ -1943,6 +2118,7 @@ function backBuild() {
   S.scoreLaserWalls = [];
   S.scoreLaserCd = 2.8;
   S.yellowSpawnCd = 4.5;
+  S.whiteSpawnCd = 0.8;
   S.boss = null;
   setMsg("Back in Build mode.");
 }
@@ -1964,11 +2140,13 @@ function restart() {
     S.scoreLaserWalls = [];
     S.scoreLaserCd = 2.8;
     S.yellow = [];
+    S.white = [];
     S.yellowMini = [];
     S.redMini = [];
     S.redMiniSpawnTick = 0;
     S.greenCube = null;
     S.yellowSpawnCd = 4.5;
+    S.whiteSpawnCd = 0.8;
     if (S.snap) {
       S.p.placed = true;
       restoreCubeToOrigin();
@@ -1984,6 +2162,7 @@ function restart() {
     }
     clearMotion();
     S.enemy = [];
+    S.white = [];
     S.yellow = [];
     S.yellowMini = [];
     S.redMini = [];
@@ -2020,6 +2199,7 @@ function restart() {
   enforceGunAttachmentCap();
   clearMotion();
   S.enemy = [];
+  S.white = [];
   S.yellow = [];
   S.yellowMini = [];
   S.redMini = [];
@@ -2032,6 +2212,7 @@ function restart() {
   S.scoreLaserWalls = [];
   S.scoreLaserCd = 2.8;
   S.yellowSpawnCd = 4.5;
+  S.whiteSpawnCd = 0.8;
   S.boss = null;
   rollSpawnPreview();
   pushEv("Run restarted in build mode.");
@@ -2489,7 +2670,8 @@ function updateEnemyBullets(dt) {
     }
     if (bulletHitsPlayer(b)) {
       S.enemyBullets.splice(i, 1);
-      gameOver(b.isLaser ? "Boss laser hit the red cube" : "Blue cube shot hit the red cube");
+      const src = b.kind === "white" ? "White cube shot" : b.kind === "green" ? "Green cube shot" : "Blue cube shot";
+      gameOver(b.isLaser ? "Boss laser hit the red cube" : src + " hit the red cube");
       return;
     }
   }
@@ -2499,10 +2681,11 @@ function updateEnemyGuns(dt) {
   if (!isScoreMode()) return;
   if (S.score < 10) return;
   const empowered = S.score >= 50;
+  const attachedMode = S.score >= 200;
   for (const e of S.enemy) {
     ensureEnemyInventory(e);
     e.shootCd -= dt;
-    if (e.shootCd > 0) continue;
+    e.factoryCd -= dt;
 
     const gunBoost = empowered ? e.pickGun : 0;
     const rapidBoost = empowered ? e.pickRapid : 0;
@@ -2511,32 +2694,57 @@ function updateEnemyGuns(dt) {
     const swordBoost = empowered ? e.pickSword : 0;
     const totalBoost = gunBoost + rapidBoost + aiBoost + facBoost + swordBoost;
 
-    const rateMul = 1 + gunBoost * 0.16 + rapidBoost * 0.34 + aiBoost * 0.14 + facBoost * 0.1;
-    const baseCd = Math.max(0.28, 1.35 / rateMul);
-    e.shootCd = baseCd + Math.random() * 0.95;
+    if (e.shootCd <= 0) {
+      const rateMul = 1 + gunBoost * 0.16 + rapidBoost * 0.38 + aiBoost * 0.17 + facBoost * 0.12;
+      const baseCd = attachedMode ? Math.max(0.11, 0.7 / rateMul) : Math.max(0.28, 1.35 / rateMul);
+      e.shootCd = baseCd + Math.random() * (attachedMode ? 0.28 : 0.95);
 
-    const dx = S.p.x - e.x;
-    const dy = S.p.y - e.y;
-    const d = Math.hypot(dx, dy) || 1;
-    let tx = S.p.x;
-    let ty = S.p.y;
-    if (aiBoost > 0) {
-      const lead = Math.min(0.45, 0.2 + aiBoost * 0.05);
-      tx += S.p.vx * lead;
-      ty += S.p.vy * lead;
+      let tx = S.p.x;
+      let ty = S.p.y;
+      if (aiBoost > 0) {
+        const lead = attachedMode ? Math.min(0.72, 0.28 + aiBoost * 0.09) : Math.min(0.45, 0.2 + aiBoost * 0.05);
+        tx += S.p.vx * lead;
+        ty += S.p.vy * lead;
+      }
+      const adx = tx - e.x;
+      const ady = ty - e.y;
+      const ad = Math.hypot(adx, ady) || 1;
+      const nx = adx / ad;
+      const ny = ady / ad;
+
+      const speed = attachedMode
+        ? 8.2 + gunBoost * 0.45 + rapidBoost * 0.38 + aiBoost * 0.56 + facBoost * 0.28
+        : 7.2 + gunBoost * 0.35 + rapidBoost * 0.25 + aiBoost * 0.42 + facBoost * 0.2;
+
+      if (attachedMode && totalBoost > 0) {
+        const totalShots = Math.min(10, 1 + gunBoost + rapidBoost + Math.ceil(aiBoost * 0.8));
+        const spread = 0.05 + Math.min(0.2, totalShots * 0.012);
+        const mid = (totalShots - 1) / 2;
+        for (let i = 0; i < totalShots; i++) {
+          const off = (i - mid) * spread;
+          const sx = nx - ny * off;
+          const sy = ny + nx * off;
+          const sd = Math.hypot(sx, sy) || 1;
+          fireEnemyBullet(e.x, e.y, (sx / sd) * speed, (sy / sd) * speed, 6, false, "blue");
+        }
+      } else {
+        fireEnemyBullet(e.x, e.y, nx * speed, ny * speed, 6, false, "blue");
+        if (totalBoost > 0) {
+          const spread = 0.14 + Math.min(0.14, totalBoost * 0.01);
+          fireEnemyBullet(e.x, e.y, (nx - ny * spread) * speed, (ny + nx * spread) * speed, 6, false, "blue");
+          if (totalBoost >= 3) fireEnemyBullet(e.x, e.y, (nx + ny * spread) * speed, (ny - nx * spread) * speed, 6, false, "blue");
+        }
+      }
     }
-    const adx = tx - e.x;
-    const ady = ty - e.y;
-    const ad = Math.hypot(adx, ady) || 1;
-    const nx = adx / ad;
-    const ny = ady / ad;
 
-    const speed = 7.2 + gunBoost * 0.35 + rapidBoost * 0.25 + aiBoost * 0.42 + facBoost * 0.2;
-    fireEnemyBullet(e.x, e.y, nx * speed, ny * speed, 6, false, "blue");
-    if (totalBoost > 0) {
-      const spread = 0.14 + Math.min(0.14, totalBoost * 0.01);
-      fireEnemyBullet(e.x, e.y, (nx - ny * spread) * speed, (ny + nx * spread) * speed, 6, false, "blue");
-      if (totalBoost >= 3) fireEnemyBullet(e.x, e.y, (nx + ny * spread) * speed, (ny - nx * spread) * speed, 6, false, "blue");
+    if (attachedMode && facBoost > 0 && e.factoryCd <= 0) {
+      e.factoryCd = Math.max(0.55, 1.7 / (1 + facBoost * 0.35));
+      const ringShots = Math.min(8, 3 + facBoost);
+      const burstSpeed = 7.4 + facBoost * 0.42;
+      for (let i = 0; i < ringShots; i++) {
+        const a = (Math.PI * 2 * i) / ringShots;
+        fireEnemyBullet(e.x, e.y, Math.cos(a) * burstSpeed, Math.sin(a) * burstSpeed, 5.2, false, "blue");
+      }
     }
   }
 }
@@ -3318,6 +3526,175 @@ function updateEnemies(dt) {
   }
 }
 
+function updateWhiteCubes(dt) {
+  if (!isScoreMode() || S.phase !== "run" || S.boss) return;
+  const scoreTargetsBase = enemyAttachmentTargets();
+  for (const w of S.white) {
+    const sx = Math.floor(w.x);
+    const sy = Math.floor(w.y);
+    const distToPlayer = Math.hypot(S.p.x - w.x, S.p.y - w.y);
+    if (distToPlayer > 56) {
+      if (relocateEnemyNearPlayer(w, 8, 14)) continue;
+    }
+
+    const targets = scoreTargetsBase.map((t) => ({ ...t, targetType: "attachment", redMiniIndex: -1 }));
+    for (let i = 0; i < S.redMini.length; i++) {
+      const r = S.redMini[i];
+      targets.push({
+        side: null,
+        index: -1,
+        x: r.x,
+        y: r.y,
+        key: "redmini:" + i,
+        targetType: "redmini",
+        redMiniIndex: i
+      });
+    }
+    let best = nearestScoreTargetForEnemy(w, targets);
+    const redNear = nearestRedMiniFrom(w.x, w.y);
+    if (redNear && redNear.dist < 7.2) {
+      const forced = targets.find((t) => t.targetType === "redmini" && t.redMiniIndex === redNear.index);
+      if (forced) best = forced;
+    }
+
+    if (best.targetType !== "redmini") {
+      const noAttachmentTarget = !best.side || !S.a[best.side].length;
+      if (noAttachmentTarget) {
+        best = {
+          side: null,
+          index: -1,
+          x: S.p.x,
+          y: S.p.y,
+          key: "player:" + Math.floor(S.p.x) + ":" + Math.floor(S.p.y),
+          targetType: "player",
+          redMiniIndex: -1
+        };
+      }
+    }
+
+    let tx = Math.floor(best.x);
+    let ty = Math.floor(best.y);
+    if (buildZoneBlocksRun() && inBuild(tx, ty)) {
+      const outside = nearestOutsideBuildCellWorld(tx, ty, sx, sy);
+      if (outside) {
+        tx = outside.x;
+        ty = outside.y;
+      }
+    }
+
+    const newKey = best.key + ":" + tx + ":" + ty;
+    w.repath -= dt;
+    if (w.repath <= 0 || w.targetKey !== newKey) {
+      w.path = worldRayBlocked(w.x, w.y, best.x, best.y) ? (findScorePath(sx, sy, tx, ty, 36) || []) : [];
+      w.targetKey = newKey;
+      w.repath = w.path.length ? 0.28 : 0.4;
+    }
+
+    let aimX = best.x;
+    let aimY = best.y;
+    if (w.path.length > 1) {
+      const step = w.path[1];
+      aimX = step.x + 0.5;
+      aimY = step.y + 0.5;
+      if (Math.hypot(aimX - w.x, aimY - w.y) < 0.22) w.path.shift();
+    }
+
+    const dx = aimX - w.x;
+    const dy = aimY - w.y;
+    const d = Math.hypot(dx, dy) || 1;
+    w.vx += (dx / d) * 8.2 * dt;
+    w.vy += (dy / d) * 8.2 * dt;
+    const f = Math.exp(-2.6 * dt);
+    w.vx *= f;
+    w.vy *= f;
+    const maxSp = 6.2 + (S.score >= 200 ? 0.8 : 0);
+    const sp = Math.hypot(w.vx, w.vy);
+    if (sp > maxSp) {
+      const k = maxSp / sp;
+      w.vx *= k;
+      w.vy *= k;
+    }
+
+    const steps = Math.max(1, Math.ceil((Math.abs(w.vx) + Math.abs(w.vy)) * dt / 0.35));
+    const sd = dt / steps;
+    for (let s = 0; s < steps; s++) {
+      resolveAxis(w, "x", sd, false);
+      resolveAxis(w, "y", sd, false);
+    }
+
+    const moved = Math.hypot(w.x - (w.lastX ?? w.x), w.y - (w.lastY ?? w.y));
+    if (moved < 0.03) w.stuckTime = (w.stuckTime || 0) + dt;
+    else w.stuckTime = Math.max(0, (w.stuckTime || 0) - dt * 1.8);
+    w.lastX = w.x;
+    w.lastY = w.y;
+    if ((w.stuckTime || 0) > 1.2) {
+      w.stuckTime = 0;
+      if (relocateEnemyNearPlayer(w, 6, 12)) continue;
+    }
+
+    w.shootCd -= dt;
+    if (w.shootCd <= 0) {
+      const txp = S.p.x + S.p.vx * (S.score >= 200 ? 0.32 : 0.2);
+      const typ = S.p.y + S.p.vy * (S.score >= 200 ? 0.32 : 0.2);
+      const qx = txp - w.x;
+      const qy = typ - w.y;
+      const qd = Math.hypot(qx, qy) || 1;
+      const nx = qx / qd;
+      const ny = qy / qd;
+      const speed = S.score >= 200 ? 11.2 : 10.3;
+      fireEnemyBullet(w.x, w.y, nx * speed, ny * speed, 6, false, "white");
+      if (S.score >= 200) {
+        const spread = 0.12;
+        fireEnemyBullet(w.x, w.y, (nx - ny * spread) * speed, (ny + nx * spread) * speed, 6, false, "white");
+      }
+      w.shootCd = (S.score >= 200 ? 0.11 : 0.16) + Math.random() * 0.16;
+    }
+
+    if (w.hitCd > 0) w.hitCd -= dt;
+    if (w.hitCd > 0) continue;
+
+    if (best.targetType === "redmini" && Number.isInteger(best.redMiniIndex)) {
+      const rm = S.redMini[best.redMiniIndex];
+      if (rm && Math.hypot(w.x - rm.x, w.y - rm.y) <= (w.size + rm.size) / 2 + 0.08) {
+        damageRedMini(best.redMiniIndex, 1, "White cube destroyed a red mini.");
+        w.hitCd = 0.38;
+        continue;
+      }
+    }
+
+    const ramHit = enemyAttachmentRamHit(w);
+    if (ramHit) {
+      const didBreak = breakSingleAttachment(ramHit.side, ramHit.index, "White cube ram");
+      if (moveModuleTotal() === 0) {
+        gameOver("All movement modules were removed");
+        return;
+      }
+      if (didBreak) {
+        w.hitCd = 0.44;
+        const kx = w.x - ramHit.anchor.x;
+        const ky = w.y - ramHit.anchor.y;
+        const kd = Math.hypot(kx, ky) || 1;
+        w.vx = (kx / kd) * 3.1;
+        w.vy = (ky / kd) * 3.1;
+        continue;
+      }
+    }
+
+    const overlapX = Math.abs(w.x - S.p.x) <= (w.size + S.p.size) / 2;
+    const overlapY = Math.abs(w.y - S.p.y) <= (w.size + S.p.size) / 2;
+    if (!overlapX || !overlapY) continue;
+    const near = nearestAttachmentSideToEnemy(w);
+    const side = near.side || enemyTouchSide(w);
+    const didBreak = breakSingleAttachment(side, near.index, "White cube hit");
+    if (moveModuleTotal() === 0) {
+      gameOver("All movement modules were removed");
+      return;
+    }
+    w.hitCd = 0.46;
+    if (didBreak) w.repath = 0;
+  }
+}
+
 function updateYellowFactories(dt) {
   if (!isScoreMode() || S.phase !== "run" || S.boss) return;
   for (const y of S.yellow) {
@@ -3615,6 +3992,10 @@ function findNearestRedMiniTarget(r) {
     const e = S.enemy[i];
     consider({ type: "blue", index: i, x: e.x, y: e.y, vx: e.vx || 0, vy: e.vy || 0, size: e.size, key: "b:" + i }, 1);
   }
+  for (let i = 0; i < S.white.length; i++) {
+    const e = S.white[i];
+    consider({ type: "white", index: i, x: e.x, y: e.y, vx: e.vx || 0, vy: e.vy || 0, size: e.size, key: "w:" + i }, 0.96);
+  }
   for (let i = 0; i < S.yellow.length; i++) {
     const e = S.yellow[i];
     consider({ type: "yellow", index: i, x: e.x, y: e.y, vx: e.vx || 0, vy: e.vy || 0, size: e.size, key: "y:" + i }, 1.04);
@@ -3653,6 +4034,13 @@ function applyRedMiniDamage(target, dmg = 2) {
     if (!e) return;
     e.hp -= dmg;
     if (e.hp <= 0) destroyYellowMiniAt(target.index, "Small yellow cube destroyed by red mini.");
+    return;
+  }
+  if (target.type === "white") {
+    const e = S.white[target.index];
+    if (!e) return;
+    e.hp -= dmg;
+    if (e.hp <= 0) destroyWhiteAt(target.index, "White cube destroyed by red mini.");
     return;
   }
   if (target.type === "green" && S.greenCube) {
@@ -3853,6 +4241,8 @@ function updateRun(dt) {
   updateScoreEnemyPopulation(dt);
   updateRedFactoryAttachmentSpawn(dt);
   updateEnemies(dt);
+  if (S.phase !== "run") return;
+  updateWhiteCubes(dt);
   if (S.phase !== "run") return;
   updateYellowFactories(dt);
   if (S.phase !== "run") return;
@@ -4093,8 +4483,21 @@ function drawGunBullets() {
 function drawEnemyBullets() {
   for (const b of S.enemyBullets) {
     const greenShot = b.kind === "green";
-    const fill = b.isLaser ? "rgba(251, 113, 133, 0.95)" : greenShot ? "rgba(34, 197, 94, 0.95)" : "rgba(59, 130, 246, 0.95)";
-    const glow = b.isLaser ? "rgba(244, 63, 94, 0.6)" : greenShot ? "rgba(21, 128, 61, 0.6)" : "rgba(59, 130, 246, 0.6)";
+    const whiteShot = b.kind === "white";
+    const fill = b.isLaser
+      ? "rgba(251, 113, 133, 0.95)"
+      : greenShot
+        ? "rgba(34, 197, 94, 0.95)"
+        : whiteShot
+          ? "rgba(248, 250, 252, 0.95)"
+          : "rgba(59, 130, 246, 0.95)";
+    const glow = b.isLaser
+      ? "rgba(244, 63, 94, 0.6)"
+      : greenShot
+        ? "rgba(21, 128, 61, 0.6)"
+        : whiteShot
+          ? "rgba(226, 232, 240, 0.6)"
+          : "rgba(59, 130, 246, 0.6)";
     ctx.save();
     ctx.fillStyle = fill;
     ctx.shadowColor = glow;
@@ -4280,6 +4683,70 @@ function drawEnemy() {
     ctx.fillRect(bx, by, bw, bh);
     ctx.fillStyle = "#22c55e";
     ctx.fillRect(bx + 0.5, by + 0.5, (bw - 1) * ratio, bh - 1);
+
+    if (isScoreMode() && S.score >= 200) {
+      const mods = [];
+      for (let i = 0; i < (e.pickGun || 0); i++) mods.push("gun");
+      for (let i = 0; i < (e.pickAIGun || 0); i++) mods.push("ai-gun");
+      for (let i = 0; i < (e.pickRapid || 0); i++) mods.push("rapid-gun");
+      for (let i = 0; i < (e.pickFactory || 0); i++) mods.push("factory");
+      const slots = [
+        [0, -1], [1, 0], [0, 1], [-1, 0],
+        [-1, -1], [1, -1], [1, 1], [-1, 1]
+      ];
+      const ms = Math.max(4, s * 0.18);
+      for (let i = 0; i < mods.length && i < slots.length; i++) {
+        const sd = slots[i];
+        const mx = px + s / 2 + sd[0] * (s / 2 + ms * 0.5) - ms / 2;
+        const my = py + s / 2 + sd[1] * (s / 2 + ms * 0.5) - ms / 2;
+        let c = "#22c55e";
+        if (mods[i] === "ai-gun") c = "#166534";
+        else if (mods[i] === "rapid-gun") c = "#eab308";
+        else if (mods[i] === "factory") c = "#ef4444";
+        ctx.fillStyle = c;
+        ctx.fillRect(mx, my, ms, ms);
+        ctx.strokeStyle = "rgba(15,23,42,.7)";
+        ctx.lineWidth = 1;
+        ctx.strokeRect(mx + 0.5, my + 0.5, ms - 1, ms - 1);
+      }
+    }
+  }
+}
+
+function drawWhiteCubes() {
+  for (const e of S.white) {
+    const h = (e.size * CELL) / 2;
+    const px = e.x * CELL - h;
+    const py = e.y * CELL - h;
+    const s = h * 2;
+
+    ctx.fillStyle = "#f8fafc";
+    ctx.fillRect(px, py, s, s);
+    ctx.strokeStyle = "#94a3b8";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(px + 1, py + 1, s - 2, s - 2);
+
+    ctx.fillStyle = "#0f172a";
+    const ey = py + s * 0.34;
+    const eo = s * 0.2;
+    const er = Math.max(2, s * 0.06);
+    ctx.beginPath();
+    ctx.arc(px + s / 2 - eo, ey, er, 0, Math.PI * 2);
+    ctx.arc(px + s / 2 + eo, ey, er, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.strokeStyle = "#0f172a";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(px + s * 0.3, py + s * 0.66);
+    ctx.lineTo(px + s * 0.7, py + s * 0.66);
+    ctx.stroke();
+
+    const ratio = Math.max(0, e.hp / e.maxHp);
+    ctx.fillStyle = "rgba(15, 23, 42, 0.72)";
+    ctx.fillRect(px, py - 8, s, 4);
+    ctx.fillStyle = "#38bdf8";
+    ctx.fillRect(px + 0.5, py - 7.5, (s - 1) * ratio, 3);
   }
 }
 
@@ -4487,6 +4954,7 @@ function render() {
   drawSword();
   drawAttach();
   drawEnemy();
+  drawWhiteCubes();
   drawYellowFactories();
   drawYellowMiniCubes();
   drawGreenCube();
@@ -4532,7 +5000,7 @@ function drawLevelButtons() {
 
 function updUI() {
   const n = S.i + 1;
-  ui.title.textContent = isScoreMode() ? "Red Cube Route Rush (Score Mode)" : "Red Cube Route Rush (20 Levels)";
+  ui.title.textContent = isScoreMode() ? "nignig (Score Mode)" : "nignig (20 Levels)";
   ui.phase.textContent = "Phase: " + S.phase[0].toUpperCase() + S.phase.slice(1);
   if (isScoreMode()) {
     ui.level.textContent = "Mode: Score Arena";
