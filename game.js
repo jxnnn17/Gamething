@@ -10,7 +10,7 @@ const BUILD_SIZE = 9;
 const LEVEL_BUILD_POS = { x: 2, y: 5 };
 const SCORE_BUILD_POS = { x: Math.floor((W - BUILD_SIZE) / 2), y: Math.floor((H - BUILD_SIZE) / 2) };
 const BUILD_ZOOM = 1.18;
-const UPDATE_VERSION = "1.0.01";
+const UPDATE_VERSION = "1.0.02";
 const BUILD = { x: LEVEL_BUILD_POS.x, y: LEVEL_BUILD_POS.y, w: BUILD_SIZE, h: BUILD_SIZE };
 const SIDES = ["up", "right", "down", "left"];
 const DIRS = ["left", "right", "up", "down"];
@@ -20,6 +20,10 @@ const MAX_YELLOW_MINI = 96;
 const MAX_RED_MINI = 56;
 const GREEN_CUBE_SPAWN_CHANCE = 0.1;
 const SCORE_100_COUNTS = { blue: 4, white: 4, yellow: 3 };
+const WORKSTATION_SIZE = 21;
+const WORKSTATION_HALF = Math.floor(WORKSTATION_SIZE / 2);
+const WORKSTATION_GAP = 200;
+const WORKSTATION_TTL = 20;
 
 const TOOLS = [
   ["place-player", "Place Cube"],
@@ -28,8 +32,8 @@ const TOOLS = [
   ["move-up", "Move Up"],
   ["move-down", "Move Down"],
   ["gun", "Gun"],
-  ["rocket", "Rocket"],
-  ["piston", "Piston"],
+  ["upgrade", "Upgrade"],
+  ["bomb", "Bomb"],
   ["stabilizer", "Stabilizer"],
   ["erase", "Erase Side"]
 ];
@@ -41,8 +45,8 @@ const TOOL_ICONS = {
   "move-up": "\u2191",
   "move-down": "\u2193",
   "gun": "\u25A3",
-  "rocket": "\u25B2",
-  "piston": "\u25A4",
+  "upgrade": "\u2736",
+  "bomb": "\u25CF",
   "stabilizer": "\u25C9",
   "erase": "\u2715"
 };
@@ -54,25 +58,34 @@ const HELP = {
   "move-up": "Place an UP movement cube in a neighboring setup cell.",
   "move-down": "Place a DOWN movement cube in a neighboring setup cell.",
   "gun": "Gun shoots only in the side direction where it is attached (press G).",
-  "rocket": "Rocket cubes can only be added onto a side that already has movement cubes.",
-  "piston": "Piston cubes can only be added onto a side that already has movement cubes.",
+  "upgrade": "Only one upgrade module allowed. It boosts attachment damage by +0.04 each kill in Score Mode.",
+  "bomb": "Bomb can be triggered with B and has a 15s cooldown. Enemies trigger the explosion.",
   "stabilizer": "Stabilizers can only be added onto a side that already has movement cubes.",
   "erase": "Remove all modules on a touched side."
 };
 
 const MCOL = {
-  move: "#0ea5e9",
+  move: "#d17b49",
   gun: "#22c55e",
+  upgrade: "#374151",
+  bomb: "#6b7280",
   "ai-gun": "#166534",
   "rapid-gun": "#eab308",
+  "purple-gun": "#9333ea",
+  burst: "#c9a26b",
   factory: "#ef4444",
-  rocket: "#fb923c",
-  piston: "#10b981",
   stabilizer: "#64748b"
 };
 
 const ui = {
   menu: document.getElementById("menuOverlay"),
+  menuHome: document.getElementById("menuHomeView"),
+  menuModes: document.getElementById("menuModeView"),
+  menuPlay: document.getElementById("menuPlayBtn"),
+  menuSettings: document.getElementById("menuSettingsBtn"),
+  menuBack: document.getElementById("menuBackBtn"),
+  menuSettingsPanel: document.getElementById("menuSettingsPanel"),
+  wsExit: document.getElementById("workstationExitBtn"),
   startGame: document.getElementById("startGameBtn"),
   startScore: document.getElementById("startScoreBtn"),
   title: document.getElementById("gameTitle"),
@@ -125,13 +138,16 @@ const S = {
   pistonCd: 0,
   sidePistonCd: 0,
   gunCd: 0,
+  bombCd: 0,
   pistonBounce: 0,
   stabilizerPulse: 0,
   stabilizerCd: 0,
+  burstCd: 0,
   sideBreakCd: { up: 0, right: 0, down: 0, left: 0 },
   snap: null,
   uiNext: 0,
   last: performance.now(),
+  mouse: { x: 0, y: 0, down: false },
   p: { placed: false, x: BUILD.x + 2.5, y: BUILD.y + 2.5, vx: 0, vy: 0, size: 0.72 },
   origin: null,
   enemy: [],
@@ -139,6 +155,7 @@ const S = {
   emitters: [],
   bullets: [],
   gunBullets: [],
+  bombs: [],
   drops: [],
   dropSpawnCd: 30,
   dropTelegraphs: [],
@@ -156,6 +173,18 @@ const S = {
   swordCount: 0,
   swordAngle: 0,
   aiGunCd: 0,
+  upgradeKills: 0,
+  bossFightCount: 0,
+  pickupFx: [],
+  bossFx: [],
+  enemyFx: [],
+  modeFlash: null,
+  workstation: null,
+  workRefX: 0,
+  workRefY: 0,
+  drag: null,
+  menuView: "home",
+  collectedDrops: emptyCollectedDrops(),
   previewSpawns: [],
   a: blankA()
 };
@@ -171,6 +200,10 @@ function cloneA(a) {
     down: a.down.map((x) => ({ ...x })),
     left: a.left.map((x) => ({ ...x }))
   };
+}
+
+function emptyCollectedDrops() {
+  return { gun: 0, "ai-gun": 0, "rapid-gun": 0, sword: 0, factory: 0, "purple-gun": 0, burst: 0 };
 }
 
 function pushEv(t) {
@@ -203,6 +236,17 @@ function applyTheme() {
   if (app) app.classList.toggle("theme-dark", S.darkTheme);
   if (ui.darkTheme) ui.darkTheme.checked = !!S.darkTheme;
   if (ui.themeState) ui.themeState.textContent = S.darkTheme ? "Dark theme ON" : "Dark theme OFF";
+}
+
+function showMenuView(view) {
+  S.menuView = view;
+  if (ui.menuHome) ui.menuHome.classList.toggle("hidden", view !== "home");
+  if (ui.menuModes) ui.menuModes.classList.toggle("hidden", view !== "modes");
+}
+
+function sideForOffset(ox, oy) {
+  if (Math.abs(ox) >= Math.abs(oy)) return ox >= 0 ? "right" : "left";
+  return oy >= 0 ? "down" : "up";
 }
 
 function rng(seed) {
@@ -255,6 +299,21 @@ function level() {
   return isScoreMode() ? S.arena : S.levels[S.i];
 }
 
+function workstationRect(ws = S.workstation) {
+  if (!ws) return null;
+  return { x: ws.x - WORKSTATION_HALF, y: ws.y - WORKSTATION_HALF, w: WORKSTATION_SIZE, h: WORKSTATION_SIZE };
+}
+
+function workstationContains(x, y, ws = S.workstation) {
+  const r = workstationRect(ws);
+  if (!r) return false;
+  return x >= r.x && x < r.x + r.w && y >= r.y && y < r.y + r.h;
+}
+
+function workstationActive() {
+  return isScoreMode() && S.phase === "run" && S.workstation && S.workstation.entered && S.workstation.ttl > 0;
+}
+
 function scoreNoise(x, y) {
   let n = (x * 374761393 + y * 668265263 + S.scoreSeed * 982451653) | 0;
   n = (n ^ (n >>> 13)) * 1274126177;
@@ -264,6 +323,7 @@ function scoreNoise(x, y) {
 
 function scoreWallAt(x, y) {
   if (inBuild(x, y)) return false;
+  if (workstationContains(x + 0.5, y + 0.5)) return false;
   if (S.scoreWallsRemoved) return false;
   const density = isScoreMode() ? (S.score >= 100 ? 0.03 : S.score >= 20 ? 0.06 : 0.1) : 0.1;
   const mode = S.scoreSeed + ":" + density;
@@ -588,6 +648,7 @@ function startLevelMode() {
   S.mode = "levels";
   setBuildZoneForMode("levels");
   ui.menu.classList.add("hidden");
+  if (ui.wsExit) ui.wsExit.style.display = "none";
   loadLevel(0);
   S.phase = "build";
   setMsg("Build phase: place your red smiley cube in the " + buildGridLabel() + " setup grid.");
@@ -598,6 +659,7 @@ function startScoreMode() {
   setBuildZoneForMode("score");
   S.score = 0;
   S.nextBossScore = 30;
+  S.bossFightCount = 0;
   S.scoreSeed = Math.floor(Math.random() * 1000000) + 1;
   S.scoreWallsRemoved = false;
   S.scoreWallCache.clear();
@@ -615,8 +677,14 @@ function startScoreMode() {
   S.scoreLaserCd = 2.8;
   S.yellowSpawnCd = 4.5;
   S.whiteSpawnCd = 0.8;
+  S.workstation = null;
+  S.workRefX = 0;
+  S.workRefY = 0;
+  S.drag = null;
+  S.collectedDrops = emptyCollectedDrops();
   S.arena = generateScoreArena();
   ui.menu.classList.add("hidden");
+  if (ui.wsExit) ui.wsExit.style.display = "none";
   resetBuild();
   S.previewSpawns = [];
   S.phase = "build";
@@ -706,7 +774,7 @@ function moduleAtOffset(ox, oy) {
 
 function addModuleAtOffset(side, m, ox, oy) {
   if (moduleAtOffset(ox, oy)) return false;
-  S.a[side].push({ ...m, ox, oy });
+  S.a[side].push({ ...m, ox, oy, pop: 1 });
   return true;
 }
 
@@ -723,6 +791,12 @@ function dedupeAttachmentOffsets() {
       next.push({ ...m, ox: off.ox, oy: off.oy });
     }
     S.a[side] = next;
+  }
+}
+
+function purgeDeprecatedModules() {
+  for (const side of SIDES) {
+    S.a[side] = S.a[side].filter((m) => m.type !== "rocket" && m.type !== "piston");
   }
 }
 
@@ -787,6 +861,8 @@ function clearMotion() {
   S.pistonCd = 0;
   S.sidePistonCd = 0;
   S.gunCd = 0;
+  S.bombCd = 0;
+  S.burstCd = 0;
   S.pistonBounce = 0;
   S.stabilizerPulse = 0;
   S.stabilizerCd = 0;
@@ -794,8 +870,15 @@ function clearMotion() {
   S.bullets = [];
   S.emitters = [];
   S.gunBullets = [];
+  S.bombs = [];
   S.enemyBullets = [];
   S.aiGunCd = 0;
+  S.upgradeKills = 0;
+  S.pickupFx = [];
+  S.bossFx = [];
+  S.enemyFx = [];
+  S.modeFlash = null;
+  S.drag = null;
   S.swordAngle = 0;
   S.scoreLaserCd = 2.8;
   S.yellowSpawnCd = 4.5;
@@ -841,8 +924,14 @@ function resetBuild() {
   S.greenCube = null;
   S.yellowSpawnCd = 4.5;
   S.whiteSpawnCd = 0.8;
+  S.workstation = null;
+  S.workRefX = S.p.x;
+  S.workRefY = S.p.y;
+  S.drag = null;
   S.swordCount = 0;
+  S.collectedDrops = emptyCollectedDrops();
   S.previewSpawns = [];
+  if (ui.wsExit) ui.wsExit.style.display = "none";
   setMsg("Build in the " + buildGridLabel() + " setup grid. Movement modules must be adjacent to the red cube.");
 }
 
@@ -907,6 +996,10 @@ function setupRunHazardsAndEnemies() {
     S.yellowSpawnCd = 4.5;
     S.whiteSpawnCd = 0.8;
     S.scoreEnemySpawnCd = 0;
+    S.workstation = null;
+    S.workRefX = S.p.x;
+    S.workRefY = S.p.y;
+    S.drag = null;
     if (Math.random() < GREEN_CUBE_SPAWN_CHANCE) spawnGreenCubeRandom();
     return;
   }
@@ -914,6 +1007,7 @@ function setupRunHazardsAndEnemies() {
   if (!S.previewSpawns.length) rollSpawnPreview();
   S.spawners = S.previewSpawns.map((s, idx) => ({ id: idx, x: s.x, y: s.y, cooldown: 0 }));
   S.enemy = S.spawners.map((sp) => spawnEnemyFromSpawner(sp));
+  for (const e of S.enemy) emitEnemySpawnFx(e.x, e.y, "#93c5fd");
   S.boss = null;
   S.emitters = level().lasers.map((ls) => ({ ...ls, shotClock: 0.2 + Math.random() * ls.fireEvery }));
   S.bullets = [];
@@ -942,9 +1036,12 @@ function spawnEnemyFromSpawner(sp) {
     pickGun: 0,
     pickRapid: 0,
     pickAIGun: 0,
+    pickPurple: 0,
+    pickBurst: 0,
     pickFactory: 0,
     pickSword: 0,
-    factoryCd: 1.2
+    factoryCd: 1.2,
+    burstCd: 1.1
   };
 }
 
@@ -957,7 +1054,9 @@ function updateSpawners(dt) {
       sp.cooldown -= dt;
       continue;
     }
-    S.enemy.push(spawnEnemyFromSpawner(sp));
+    const e = spawnEnemyFromSpawner(sp);
+    S.enemy.push(e);
+    emitEnemySpawnFx(e.x, e.y, "#93c5fd");
     sp.cooldown = 0;
     pushEv("Blue cube respawned from spawner.");
   }
@@ -995,10 +1094,14 @@ function spawnScoreEnemyRandom() {
       pickGun: 0,
       pickRapid: 0,
       pickAIGun: 0,
+      pickPurple: 0,
+      pickBurst: 0,
       pickFactory: 0,
       pickSword: 0,
-      factoryCd: 1.2
+      factoryCd: 1.2,
+      burstCd: 1.1
     });
+    emitEnemySpawnFx(x + 0.5, y + 0.5, "#93c5fd");
     return;
   }
 }
@@ -1035,6 +1138,7 @@ function spawnWhiteCubeRandom() {
       path: [],
       targetKey: ""
     });
+    emitEnemySpawnFx(x + 0.5, y + 0.5, "#f8fafc");
     pushEv("White blaster cube entered the map.");
     return true;
   }
@@ -1073,6 +1177,7 @@ function spawnYellowFactoryRandom() {
       path: [],
       targetKey: ""
     });
+    emitEnemySpawnFx(x + 0.5, y + 0.5, "#facc15");
     pushEv("Yellow factory cube entered the map.");
     return true;
   }
@@ -1134,6 +1239,7 @@ function spawnYellowMiniFromFactory(fy) {
       path: [],
       targetKey: ""
     });
+    emitEnemySpawnFx(x + 0.5, y + 0.5, "#fde047");
     return true;
   }
   return false;
@@ -1269,6 +1375,9 @@ function spawnBoss() {
     S.yellow = [];
     S.yellowMini = [];
     const hp = scoreBossBaseHp();
+    const fightIndex = Math.max(0, Math.floor((S.nextBossScore - 30) / 30));
+    const moveMul = fightIndex === 0 ? 1 : 1.15 * Math.pow(1.04, Math.max(0, fightIndex - 1));
+    const bulletRange = fightIndex >= 1 ? 25 : BULLET_RANGE_TILES;
     S.boss = {
       x: sx + 0.5,
       y: sy + 0.5,
@@ -1279,10 +1388,13 @@ function spawnBoss() {
       maxHp: hp,
       shootCd: 0.22,
       laserCd: 0.9,
+      moveMul,
+      bulletRange,
       swordHitCd: 0,
       repath: 0,
       path: []
     };
+    S.bossFightCount = fightIndex + 1;
     pushEv("Boss arrived at score " + S.nextBossScore + ".");
     setMsg("Boss fight active. Defeat the dark blue cube.");
     return;
@@ -1310,6 +1422,7 @@ function spawnBoss() {
 }
 
 function despawnBoss() {
+  if (S.boss) emitBossDeathFx(S.boss.x, S.boss.y);
   S.boss = null;
   if (isScoreMode()) {
     S.scoreWallsRemoved = false;
@@ -1425,6 +1538,10 @@ function placeAt(x, y) {
     setMsg("That side has reached the module limit.");
     return;
   }
+  if (S.tool === "upgrade" && hasUpgradeAttachment()) {
+    setMsg("Only one upgrade attachment is allowed.");
+    return;
+  }
   if (S.tool === "gun" && gunAttachmentCount() >= MAX_GUN_ATTACHMENTS) {
     setMsg("Gun module cap reached (max " + MAX_GUN_ATTACHMENTS + ").");
     return;
@@ -1432,8 +1549,8 @@ function placeAt(x, y) {
 
   let m = null;
   if (S.tool === "gun") m = { type: "gun", dir: side };
-  if (S.tool === "rocket") m = { type: "rocket", dir: dirFromSide(side) };
-  if (S.tool === "piston") m = { type: "piston", dir: dirFromSide(side) };
+  if (S.tool === "upgrade") m = { type: "upgrade" };
+  if (S.tool === "bomb") m = { type: "bomb" };
   if (S.tool === "stabilizer") m = { type: "stabilizer" };
   if (m) {
     if (!addModuleAtOffset(side, m, ox, oy)) {
@@ -1451,12 +1568,28 @@ function countType(type, side = null) {
   return SIDES.reduce((sum, sd) => sum + S.a[sd].filter((m) => m.type === type).length, 0);
 }
 
+function hasUpgradeAttachment() {
+  return countType("upgrade") > 0;
+}
+
+function attachmentDamageBonus() {
+  if (!isScoreMode()) return 0;
+  if (!hasUpgradeAttachment()) return 0;
+  return S.upgradeKills * 0.04;
+}
+
+function registerAttachmentKill() {
+  if (!isScoreMode()) return;
+  if (!hasUpgradeAttachment()) return;
+  S.upgradeKills += 1;
+}
+
 function gunAttachmentCount() {
   return countType("gun") + countType("ai-gun") + countType("rapid-gun");
 }
 
 function isGunAttachmentType(type) {
-  return type === "gun" || type === "ai-gun" || type === "rapid-gun";
+  return type === "gun" || type === "ai-gun" || type === "rapid-gun" || type === "purple-gun";
 }
 
 function enforceGunAttachmentCap() {
@@ -1526,6 +1659,39 @@ function factoryModules() {
   return out;
 }
 
+function purpleGunModules() {
+  const out = [];
+  for (const side of SIDES) {
+    for (let i = 0; i < S.a[side].length; i++) {
+      const m = S.a[side][i];
+      if (m.type === "purple-gun") out.push({ side, index: i, mod: m });
+    }
+  }
+  return out;
+}
+
+function burstModules() {
+  const out = [];
+  for (const side of SIDES) {
+    for (let i = 0; i < S.a[side].length; i++) {
+      const m = S.a[side][i];
+      if (m.type === "burst") out.push({ side, index: i, mod: m });
+    }
+  }
+  return out;
+}
+
+function bombModules() {
+  const out = [];
+  for (const side of SIDES) {
+    for (let i = 0; i < S.a[side].length; i++) {
+      const m = S.a[side][i];
+      if (m.type === "bomb") out.push({ side, index: i, mod: m });
+    }
+  }
+  return out;
+}
+
 function rollDropType(allowNone = true) {
   const r = Math.random();
   if (r < 0.25) return "gun";
@@ -1538,6 +1704,13 @@ function rollDropType(allowNone = true) {
   if (rr < 0.35) return "ai-gun";
   if (rr < 0.45) return "sword";
   return "rapid-gun";
+}
+
+function rollBlueKillDropType() {
+  const r = Math.random();
+  if (r < 0.05) return "purple-gun";
+  if (r < 0.15) return "burst";
+  return rollDropType(true);
 }
 
 function spawnScoreDrop(x, y) {
@@ -1571,6 +1744,96 @@ function spawnDropBurst(x, y, type, count) {
   }
 }
 
+function dropColor(type) {
+  if (type === "ai-gun") return "#166534";
+  if (type === "sword") return "#dc2626";
+  if (type === "rapid-gun") return "#eab308";
+  if (type === "factory") return "#ef4444";
+  if (type === "purple-gun") return "#9333ea";
+  if (type === "burst") return "#c9a26b";
+  return "#22c55e";
+}
+
+function emitPickupFx(x, y, type) {
+  const color = dropColor(type);
+  for (let i = 0; i < 10; i++) {
+    const ang = (Math.PI * 2 * i) / 10 + Math.random() * 0.15;
+    const speed = 0.6 + Math.random() * 1.2;
+    S.pickupFx.push({
+      x,
+      y,
+      vx: Math.cos(ang) * speed,
+      vy: Math.sin(ang) * speed,
+      ttl: 0.42 + Math.random() * 0.2,
+      maxTtl: 0.62,
+      color,
+      size: 2 + Math.random() * 2.8
+    });
+  }
+}
+
+function emitBossDeathFx(x, y) {
+  for (let i = 0; i < 96; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const speed = 1.5 + Math.random() * 5.8;
+    S.bossFx.push({
+      x,
+      y,
+      vx: Math.cos(ang) * speed,
+      vy: Math.sin(ang) * speed,
+      ttl: 0.7 + Math.random() * 0.9,
+      maxTtl: 1.6,
+      color: i % 3 === 0 ? "#f97316" : i % 3 === 1 ? "#ef4444" : "#fbbf24",
+      size: 3 + Math.random() * 4.5
+    });
+  }
+}
+
+function emitEnemyBurstFx(x, y, baseColor = "#93c5fd", count = 22, ttl = 0.25, speedLo = 1.3, speedHi = 4.2) {
+  for (let i = 0; i < count; i++) {
+    const ang = (Math.PI * 2 * i) / count + Math.random() * 0.24;
+    const speed = speedLo + Math.random() * (speedHi - speedLo);
+    S.enemyFx.push({
+      x,
+      y,
+      vx: Math.cos(ang) * speed,
+      vy: Math.sin(ang) * speed,
+      ttl,
+      maxTtl: ttl,
+      color: baseColor,
+      size: 2 + Math.random() * 2.8
+    });
+  }
+}
+
+function emitEnemySpawnFx(x, y, color = "#93c5fd") {
+  emitEnemyBurstFx(x, y, color, 18, 0.25, 0.8, 2.6);
+}
+
+function emitEnemyDeathFx(x, y, color = "#60a5fa") {
+  emitEnemyBurstFx(x, y, color, 26, 0.25, 1.4, 4.4);
+}
+
+function emitBombExplosionFx(x, y, radius = 5) {
+  const parts = Math.max(36, Math.floor(radius * 10));
+  for (let i = 0; i < parts; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const ring = Math.random() * radius;
+    const speed = 4.2 + Math.random() * 5.4;
+    const color = i % 3 === 0 ? "#fbbf24" : i % 3 === 1 ? "#f97316" : "#ef4444";
+    S.enemyFx.push({
+      x: x + Math.cos(ang) * ring * 0.15,
+      y: y + Math.sin(ang) * ring * 0.15,
+      vx: Math.cos(ang) * speed,
+      vy: Math.sin(ang) * speed,
+      ttl: 0.25,
+      maxTtl: 0.25,
+      color,
+      size: 2.8 + Math.random() * 3.4
+    });
+  }
+}
+
 function randomDropSpawnPoint() {
   const halfW = Math.floor(ui.c.width / CELL / 2);
   const halfH = Math.floor(ui.c.height / CELL / 2);
@@ -1584,6 +1847,98 @@ function randomDropSpawnPoint() {
     return { x: x + 0.5, y: y + 0.5 };
   }
   return null;
+}
+
+function enemyClusterCountNear(x, y, radius = 9) {
+  let c = 0;
+  const rs = radius * radius;
+  const adds = [S.enemy, S.white, S.yellow, S.yellowMini];
+  for (const list of adds) {
+    for (const e of list) {
+      const dx = e.x - x;
+      const dy = e.y - y;
+      if (dx * dx + dy * dy <= rs) c++;
+    }
+  }
+  return c;
+}
+
+function spawnWorkstation() {
+  for (let at = 0; at < 120; at++) {
+    const ang = Math.random() * Math.PI * 2;
+    const dist = 22 + Math.random() * 34;
+    const cx = Math.floor(S.p.x + Math.cos(ang) * dist) + 0.5;
+    const cy = Math.floor(S.p.y + Math.sin(ang) * dist) + 0.5;
+    if (Math.hypot(cx - S.p.x, cy - S.p.y) < 12) continue;
+    if (solid(Math.floor(cx), Math.floor(cy))) continue;
+    if (buildZoneBlocksRun() && inBuild(Math.floor(cx), Math.floor(cy))) continue;
+    if (S.boss && Math.hypot(S.boss.x - cx, S.boss.y - cy) < 15) continue;
+    if (enemyClusterCountNear(cx, cy, 10) >= 6) continue;
+    const r = workstationRect({ x: cx, y: cy });
+    if (!r) continue;
+    S.workstation = {
+      x: cx,
+      y: cy,
+      ttl: WORKSTATION_TTL,
+      entered: false,
+      drag: null
+    };
+    S.workRefX = cx;
+    S.workRefY = cy;
+    pushEv("Workstation appeared nearby.");
+    return true;
+  }
+  return false;
+}
+
+function startWorkstationEdit() {
+  if (!S.workstation || S.workstation.entered) return;
+  S.workstation.entered = true;
+  S.p.x = S.workstation.x;
+  S.p.y = S.workstation.y;
+  S.p.vx = 0;
+  S.p.vy = 0;
+  if (ui.wsExit) ui.wsExit.style.display = "inline-flex";
+  pushEv("Workstation engaged: drag attachments to rearrange.");
+}
+
+function endWorkstation(reason = "Workstation expired.") {
+  if (!S.workstation) return;
+  if (S.drag) {
+    const d = S.drag;
+    addModuleAtOffset(d.fallbackSide, d.mod, d.fallbackOx, d.fallbackOy);
+    S.drag = null;
+  }
+  S.workstation = null;
+  if (ui.wsExit) ui.wsExit.style.display = "none";
+  pushEv(reason);
+}
+
+function updateWorkstation(dt) {
+  if (!isScoreMode() || S.phase !== "run") return;
+  if (!S.workstation) {
+    const moved = Math.hypot(S.p.x - S.workRefX, S.p.y - S.workRefY);
+    if (moved >= WORKSTATION_GAP) spawnWorkstation();
+    return;
+  }
+
+  S.workstation.ttl -= dt;
+  if (S.workstation.ttl <= 0) {
+    endWorkstation();
+    return;
+  }
+
+  if (!S.workstation.entered) {
+    if (workstationContains(S.p.x, S.p.y, S.workstation)) {
+      startWorkstationEdit();
+    }
+    return;
+  }
+
+  S.p.x = S.workstation.x;
+  S.p.y = S.workstation.y;
+  S.p.vx = 0;
+  S.p.vy = 0;
 }
 
 function queueTimedDrops() {
@@ -1608,26 +1963,32 @@ function queueTimedDrops() {
 function destroyEnemyAt(index, reason = "Blue cube destroyed.") {
   const e = S.enemy[index];
   if (!e) return;
+  emitEnemyDeathFx(e.x, e.y, "#60a5fa");
   pushEv(reason);
   const sp = S.spawners.find((s) => s.id === e.spawnerId);
   if (sp) sp.cooldown = 2.4;
-  spawnScoreDrop(e.x, e.y);
+  const type = rollBlueKillDropType();
+  if (type) spawnSpecificDrop(e.x, e.y, type);
   S.enemy.splice(index, 1);
+  registerAttachmentKill();
   addScore(1);
 }
 
 function destroyWhiteAt(index, reason = "White cube destroyed.") {
   const e = S.white[index];
   if (!e) return;
+  emitEnemyDeathFx(e.x, e.y, "#f8fafc");
   pushEv(reason);
   spawnScoreDrop(e.x, e.y);
   S.white.splice(index, 1);
+  registerAttachmentKill();
   addScore(1);
 }
 
 function destroyYellowAt(index, reason = "Yellow cube destroyed.") {
   const e = S.yellow[index];
   if (!e) return;
+  emitEnemyDeathFx(e.x, e.y, "#facc15");
   pushEv(reason);
   if (Math.random() < 0.2) {
     spawnSpecificDrop(e.x, e.y, "factory");
@@ -1636,27 +1997,32 @@ function destroyYellowAt(index, reason = "Yellow cube destroyed.") {
     spawnScoreDrop(e.x, e.y);
   }
   S.yellow.splice(index, 1);
+  registerAttachmentKill();
 }
 
 function destroyYellowMiniAt(index, reason = "Small yellow cube destroyed.") {
   const e = S.yellowMini[index];
   if (!e) return;
+  emitEnemyDeathFx(e.x, e.y, "#fde047");
   if (Math.random() < 0.02) {
     spawnSpecificDrop(e.x, e.y, "factory");
     pushEv("Factory attachment dropped.");
   }
   pushEv(reason);
   S.yellowMini.splice(index, 1);
+  registerAttachmentKill();
 }
 
 function destroyGreenCube(reason = "Green heavy cube destroyed.") {
   if (!S.greenCube) return;
   const g = S.greenCube;
+  emitEnemyDeathFx(g.x, g.y, "#22c55e");
   pushEv(reason);
   spawnDropBurst(g.x, g.y, "gun", 5);
   spawnDropBurst(g.x, g.y, "factory", 1);
   spawnDropBurst(g.x, g.y, "ai-gun", 2);
   S.greenCube = null;
+  registerAttachmentKill();
 }
 
 function ensureEnemyInventory(e) {
@@ -1664,24 +2030,30 @@ function ensureEnemyInventory(e) {
   if (!Number.isFinite(e.pickGun)) e.pickGun = 0;
   if (!Number.isFinite(e.pickRapid)) e.pickRapid = 0;
   if (!Number.isFinite(e.pickAIGun)) e.pickAIGun = 0;
+  if (!Number.isFinite(e.pickPurple)) e.pickPurple = 0;
+  if (!Number.isFinite(e.pickBurst)) e.pickBurst = 0;
   if (!Number.isFinite(e.pickFactory)) e.pickFactory = 0;
   if (!Number.isFinite(e.pickSword)) e.pickSword = 0;
   if (!Number.isFinite(e.factoryCd)) e.factoryCd = 1.2;
+  if (!Number.isFinite(e.burstCd)) e.burstCd = 1.1;
 }
 
 function enemyPickupDrop(e, type) {
-  if (!e) return;
+  if (!e) return false;
   ensureEnemyInventory(e);
   if (type === "gun") e.pickGun++;
   else if (type === "rapid-gun") e.pickRapid++;
   else if (type === "ai-gun") e.pickAIGun++;
+  else if (type === "purple-gun") e.pickPurple++;
+  else if (type === "burst") e.pickBurst++;
   else if (type === "factory") {
     e.pickFactory++;
     e.maxHp = Math.min(12, e.maxHp + 1);
     e.hp = Math.min(e.maxHp, e.hp + 1);
   } else if (type === "sword") e.pickSword++;
-  else return;
+  else return false;
   pushEv("Blue cube picked up " + type + " block.");
+  return true;
 }
 
 function attachPickupBlock(type, fromDrop = false) {
@@ -1707,6 +2079,8 @@ function attachPickupBlock(type, fromDrop = false) {
   if (type === "gun") ok = addModuleAtOffset(side, { type: "gun", dir: side }, spot.ox, spot.oy);
   else if (type === "ai-gun") ok = addModuleAtOffset(side, { type: "ai-gun", dir: side }, spot.ox, spot.oy);
   else if (type === "rapid-gun") ok = addModuleAtOffset(side, { type: "rapid-gun", dir: side }, spot.ox, spot.oy);
+  else if (type === "purple-gun") ok = addModuleAtOffset(side, { type: "purple-gun" }, spot.ox, spot.oy);
+  else if (type === "burst") ok = addModuleAtOffset(side, { type: "burst" }, spot.ox, spot.oy);
   else if (type === "factory") ok = addModuleAtOffset(side, { type: "factory" }, spot.ox, spot.oy);
   else return false;
   if (!ok) return false;
@@ -1716,11 +2090,13 @@ function attachPickupBlock(type, fromDrop = false) {
 
 function fireGuns() {
   if (S.phase !== "run") return;
+  if (workstationActive()) return;
   if (playerInBlockedBuildZone()) return;
   if (S.gunCd > 0) return;
   const guns = gunModules();
   if (!guns.length) return;
   let rapidFound = false;
+  const dmg = 1 + attachmentDamageBonus();
 
   for (const g of guns) {
     const a = sideAttachmentAnchor(g.side, g.index + 1);
@@ -1735,19 +2111,168 @@ function fireGuns() {
     if (g.mod.dir === "up") { y -= o; vy = -speed; }
     if (g.mod.dir === "down") { y += o; vy = speed; }
     if (g.mod.type === "rapid-gun") rapidFound = true;
-    S.gunBullets.push({ x, y, vx, vy, ttl: 4.8, dmg: 1, dist: 0, maxDist: BULLET_RANGE_TILES });
+    S.gunBullets.push({ x, y, vx, vy, ttl: 4.8, dmg, dist: 0, maxDist: BULLET_RANGE_TILES, canBounce: false, bounces: 0, kind: "gun" });
   }
-  S.gunCd = rapidFound ? 0.06 : 0.12;
+  S.gunCd = rapidFound ? 0.125 : 0.25;
+}
+
+function firePurpleGunsAt(tx, ty) {
+  if (S.phase !== "run") return false;
+  if (workstationActive()) return false;
+  if (playerInBlockedBuildZone()) return false;
+  const guns = purpleGunModules();
+  if (!guns.length) return false;
+  const dmg = 1 + attachmentDamageBonus();
+  for (const g of guns) {
+    const a = sideAttachmentAnchor(g.side, g.index + 1);
+    const dx = tx - a.x;
+    const dy = ty - a.y;
+    const d = Math.hypot(dx, dy) || 1;
+    const speed = 10.6;
+    S.gunBullets.push({
+      x: a.x,
+      y: a.y,
+      vx: (dx / d) * speed,
+      vy: (dy / d) * speed,
+      ttl: 6.8,
+      dmg,
+      dist: 0,
+      maxDist: 30,
+      canBounce: true,
+      bounces: 30,
+      kind: "purple"
+    });
+  }
+  return true;
+}
+
+function fireBurstAttachments() {
+  if (S.phase !== "run") return false;
+  if (workstationActive()) return false;
+  if (playerInBlockedBuildZone()) return false;
+  if (S.burstCd > 0) return false;
+  const mods = burstModules();
+  if (!mods.length) return false;
+  const dmg = 1 + attachmentDamageBonus();
+  const speed = 8.9;
+  for (const m of mods) {
+    const a = sideAttachmentAnchor(m.side, m.index + 1);
+    for (let i = 0; i < 30; i++) {
+      const ang = (Math.PI * 2 * i) / 30;
+      S.gunBullets.push({
+        x: a.x,
+        y: a.y,
+        vx: Math.cos(ang) * speed,
+        vy: Math.sin(ang) * speed,
+        ttl: 5.2,
+        dmg,
+        dist: 0,
+        maxDist: BULLET_RANGE_TILES,
+        canBounce: false,
+        bounces: 0,
+        kind: "burst"
+      });
+    }
+  }
+  S.burstCd = 4;
+  pushEv("Burst attachment fired.");
+  return true;
+}
+
+function fireBombAttachment() {
+  if (S.phase !== "run") return false;
+  if (workstationActive()) return false;
+  if (playerInBlockedBuildZone()) return false;
+  if (S.bombCd > 0) return false;
+  const mods = bombModules();
+  if (!mods.length) return false;
+  for (const m of mods) {
+    const a = sideAttachmentAnchor(m.side, m.index + 1);
+    S.bombs.push({
+      x: a.x,
+      y: a.y,
+      ttl: 15,
+      arm: 0.22,
+      radius: 5,
+      dmg: 12
+    });
+  }
+  S.bombCd = 15;
+  pushEv("Bomb deployed.");
+  return true;
+}
+
+function applyBombDamageAt(x, y, radius, dmg) {
+  const applyList = (arr, onDeath) => {
+    for (let i = arr.length - 1; i >= 0; i--) {
+      const e = arr[i];
+      if (Math.hypot(e.x - x, e.y - y) > radius + e.size / 2) continue;
+      e.hp -= dmg;
+      if (e.hp <= 0) onDeath(i);
+    }
+  };
+  applyList(S.enemy, (i) => destroyEnemyAt(i, "Blue cube destroyed by bomb."));
+  applyList(S.white, (i) => destroyWhiteAt(i, "White cube destroyed by bomb."));
+  applyList(S.yellow, (i) => destroyYellowAt(i, "Yellow cube destroyed by bomb."));
+  applyList(S.yellowMini, (i) => destroyYellowMiniAt(i, "Small yellow cube destroyed by bomb."));
+  if (S.greenCube && Math.hypot(S.greenCube.x - x, S.greenCube.y - y) <= radius + S.greenCube.size / 2) {
+    S.greenCube.hp -= dmg;
+    if (S.greenCube.hp <= 0) destroyGreenCube("Green heavy cube destroyed by bomb.");
+  }
+  if (S.boss && Math.hypot(S.boss.x - x, S.boss.y - y) <= radius + S.boss.size / 2) {
+    S.boss.hp -= dmg;
+    if (S.boss.hp <= 0) despawnBoss();
+  }
+}
+
+function updateBombs(dt) {
+  if (S.phase !== "run") return;
+  for (let i = S.bombs.length - 1; i >= 0; i--) {
+    const b = S.bombs[i];
+    b.ttl -= dt;
+    b.arm = Math.max(0, b.arm - dt);
+    if (b.ttl <= 0) {
+      S.bombs.splice(i, 1);
+      continue;
+    }
+    if (b.arm > 0) continue;
+
+    let triggered = false;
+    const triggerList = [S.enemy, S.white, S.yellow, S.yellowMini];
+    for (const list of triggerList) {
+      for (const e of list) {
+        if (Math.hypot(e.x - b.x, e.y - b.y) <= 0.62 + e.size / 2) {
+          triggered = true;
+          break;
+        }
+      }
+      if (triggered) break;
+    }
+    if (!triggered && S.greenCube && Math.hypot(S.greenCube.x - b.x, S.greenCube.y - b.y) <= 0.62 + S.greenCube.size / 2) {
+      triggered = true;
+    }
+    if (!triggered && S.boss && Math.hypot(S.boss.x - b.x, S.boss.y - b.y) <= 0.62 + S.boss.size / 2) {
+      triggered = true;
+    }
+    if (!triggered) continue;
+
+    applyBombDamageAt(b.x, b.y, b.radius, b.dmg);
+    emitBombExplosionFx(b.x, b.y, b.radius);
+    pushEv("Bomb exploded.");
+    S.bombs.splice(i, 1);
+  }
 }
 
 function updateAIGuns(dt) {
   if (S.phase !== "run") return;
   if (!isScoreMode()) return;
+  if (workstationActive()) return;
   if (playerInBlockedBuildZone()) return;
   const guns = aiGunModules();
   if (!guns.length) return;
   S.aiGunCd -= dt;
   if (S.aiGunCd > 0) return;
+  const dmg = 1 + attachmentDamageBonus();
 
   for (const g of guns) {
     const a = sideAttachmentAnchor(g.side, g.index + 1);
@@ -1794,7 +2319,19 @@ function updateAIGuns(dt) {
     const dy = target.y - a.y;
     const d = Math.hypot(dx, dy) || 1;
     const speed = 10.4;
-    S.gunBullets.push({ x: a.x, y: a.y, vx: (dx / d) * speed, vy: (dy / d) * speed, ttl: 4.8, dmg: 1, dist: 0, maxDist: BULLET_RANGE_TILES });
+    S.gunBullets.push({
+      x: a.x,
+      y: a.y,
+      vx: (dx / d) * speed,
+      vy: (dy / d) * speed,
+      ttl: 4.8,
+      dmg,
+      dist: 0,
+      maxDist: BULLET_RANGE_TILES,
+      canBounce: false,
+      bounces: 0,
+      kind: "ai"
+    });
   }
   S.aiGunCd = 0.45;
 }
@@ -1866,12 +2403,15 @@ function updateDropsAndSword(dt, prevX = S.p.x, prevY = S.p.y) {
     if (pickupDist <= 1.02) {
       if (d.type === "sword") {
         S.swordCount += 1;
+        S.collectedDrops.sword += 1;
         pushEv("Picked up Sword.");
       } else if (attachPickupBlock(d.type, true)) {
+        if (Number.isFinite(S.collectedDrops[d.type])) S.collectedDrops[d.type] += 1;
         pushEv("Picked up " + d.type + " block.");
       } else {
         continue;
       }
+      emitPickupFx(S.p.x, S.p.y, d.type);
       S.drops.splice(i, 1);
     }
   }
@@ -1881,8 +2421,7 @@ function updateDropsAndSword(dt, prevX = S.p.x, prevY = S.p.y) {
     let picked = false;
     for (const e of S.enemy) {
       if (Math.hypot(d.x - e.x, d.y - e.y) <= 0.76) {
-        enemyPickupDrop(e, d.type);
-        picked = true;
+        picked = enemyPickupDrop(e, d.type);
         break;
       }
     }
@@ -1978,8 +2517,22 @@ function updateGunBullets(dt) {
       continue;
     }
     if (solid(Math.floor(b.x), Math.floor(b.y))) {
-      S.gunBullets.splice(i, 1);
-      continue;
+      if (b.canBounce && (b.bounces || 0) > 0) {
+        const hitX = solid(Math.floor(b.x), Math.floor(oy));
+        const hitY = solid(Math.floor(ox), Math.floor(b.y));
+        b.x = ox;
+        b.y = oy;
+        if (hitX) b.vx = -b.vx;
+        if (hitY) b.vy = -b.vy;
+        if (!hitX && !hitY) {
+          b.vx = -b.vx;
+          b.vy = -b.vy;
+        }
+        b.bounces = Math.max(0, (b.bounces || 0) - 1);
+      } else {
+        S.gunBullets.splice(i, 1);
+        continue;
+      }
     }
 
     let hitEnemy = false;
@@ -2063,6 +2616,7 @@ function startRun() {
     return;
   }
 
+  purgeDeprecatedModules();
   dedupeAttachmentOffsets();
   enforceGunAttachmentCap();
 
@@ -2077,10 +2631,15 @@ function startRun() {
   if (isScoreMode()) S.scoreWallsRemoved = false;
   S.drops = [];
   S.swordCount = 0;
+  if (isScoreMode()) S.collectedDrops = emptyCollectedDrops();
   S.swordAngle = 0;
   S.aiGunCd = 0;
   if (!S.origin) S.origin = { x: S.p.x, y: S.p.y };
   S.snap = { x: S.p.x, y: S.p.y, a: cloneA(S.a) };
+  S.workstation = null;
+  S.workRefX = S.p.x;
+  S.workRefY = S.p.y;
+  S.drag = null;
   clearMotion();
   setupRunHazardsAndEnemies();
   if (isScoreMode()) setMsg("Score Mode started. Destroy blue cubes and survive.");
@@ -2098,6 +2657,7 @@ function backBuild() {
     S.p.placed = true;
     restoreCubeToOrigin();
     S.a = cloneA(S.snap.a);
+    purgeDeprecatedModules();
     dedupeAttachmentOffsets();
     enforceGunAttachmentCap();
   } else {
@@ -2119,7 +2679,10 @@ function backBuild() {
   S.scoreLaserCd = 2.8;
   S.yellowSpawnCd = 4.5;
   S.whiteSpawnCd = 0.8;
+  S.workstation = null;
+  S.drag = null;
   S.boss = null;
+  if (ui.wsExit) ui.wsExit.style.display = "none";
   setMsg("Back in Build mode.");
 }
 
@@ -2127,6 +2690,7 @@ function restart() {
   if (isScoreMode()) {
     S.score = 0;
     S.nextBossScore = 30;
+    S.bossFightCount = 0;
     S.scoreSeed = Math.floor(Math.random() * 1000000) + 1;
     S.scoreWallsRemoved = false;
     S.scoreEnemySpawnCd = 0;
@@ -2147,10 +2711,14 @@ function restart() {
     S.greenCube = null;
     S.yellowSpawnCd = 4.5;
     S.whiteSpawnCd = 0.8;
+    S.workstation = null;
+    S.drag = null;
+    S.collectedDrops = emptyCollectedDrops();
     if (S.snap) {
       S.p.placed = true;
       restoreCubeToOrigin();
       S.a = cloneA(S.snap.a);
+      purgeDeprecatedModules();
       dedupeAttachmentOffsets();
       enforceGunAttachmentCap();
     } else if (!restoreCubeToOrigin()) {
@@ -2173,6 +2741,8 @@ function restart() {
     S.emitters = [];
     S.previewSpawns = [];
     S.gunBullets = [];
+    S.workstation = null;
+    S.drag = null;
     S.phase = "build";
     setMsg("Score Mode restarted with your previous build setup.");
     pushEv("Score run restarted.");
@@ -2195,6 +2765,7 @@ function restart() {
   S.p.placed = true;
   restoreCubeToOrigin();
   S.a = cloneA(S.snap.a);
+  purgeDeprecatedModules();
   dedupeAttachmentOffsets();
   enforceGunAttachmentCap();
   clearMotion();
@@ -2213,6 +2784,8 @@ function restart() {
   S.scoreLaserCd = 2.8;
   S.yellowSpawnCd = 4.5;
   S.whiteSpawnCd = 0.8;
+  S.workstation = null;
+  S.drag = null;
   S.boss = null;
   rollSpawnPreview();
   pushEv("Run restarted in build mode.");
@@ -2247,6 +2820,7 @@ function gameOver(reason) {
 }
 function firePistons(filterDir = null) {
   if (S.phase !== "run") return;
+  if (workstationActive()) return;
   if (playerInBlockedBuildZone()) return;
   const cooldown = filterDir ? S.sidePistonCd : S.pistonCd;
   if (cooldown > 0) return;
@@ -2275,6 +2849,7 @@ function firePistons(filterDir = null) {
 
 function triggerStabilizerPulse() {
   if (S.phase !== "run") return;
+  if (workstationActive()) return;
   if (playerInBlockedBuildZone()) return;
   if (S.stabilizerCd > 0) return;
   if (countType("stabilizer") === 0) return;
@@ -2402,6 +2977,55 @@ function sideAttachmentAnchors(side) {
     out.push(sideAttachmentAnchor(side, i + 1));
   }
   return out;
+}
+
+function attachmentAtWorld(wx, wy, radius = 0.45) {
+  let best = null;
+  let bestD = Infinity;
+  for (const side of SIDES) {
+    for (let i = 0; i < S.a[side].length; i++) {
+      const a = sideAttachmentAnchor(side, i + 1);
+      const d = Math.hypot(a.x - wx, a.y - wy);
+      if (d <= radius && d < bestD) {
+        bestD = d;
+        const off = moduleOffset(side, i);
+        best = { side, index: i, ox: off.ox, oy: off.oy };
+      }
+    }
+  }
+  return best;
+}
+
+function beginAttachmentDrag(wx, wy) {
+  if (!workstationActive()) return false;
+  const hit = attachmentAtWorld(wx, wy);
+  if (!hit) return false;
+  const mod = S.a[hit.side][hit.index];
+  if (!mod) return false;
+  S.a[hit.side].splice(hit.index, 1);
+  S.drag = {
+    mod: { ...mod, pop: 1 },
+    fallbackSide: hit.side,
+    fallbackOx: hit.ox,
+    fallbackOy: hit.oy
+  };
+  return true;
+}
+
+function endAttachmentDrag(wx, wy) {
+  if (!S.drag) return false;
+  const d = S.drag;
+  const step = S.p.size;
+  const ox = Math.round((wx - S.p.x) / step);
+  const oy = Math.round((wy - S.p.y) / step);
+  let placed = false;
+  if (!(ox === 0 && oy === 0) && !moduleAtOffset(ox, oy)) {
+    const side = sideForOffset(ox, oy);
+    placed = addModuleAtOffset(side, d.mod, ox, oy);
+  }
+  if (!placed) addModuleAtOffset(d.fallbackSide, d.mod, d.fallbackOx, d.fallbackOy);
+  S.drag = null;
+  return true;
 }
 
 function bulletHitsPlayer(b) {
@@ -2586,8 +3210,8 @@ function updateLaserBullets(dt) {
   }
 }
 
-function fireEnemyBullet(x, y, vx, vy, ttl = 6, isLaser = false, kind = "blue") {
-  S.enemyBullets.push({ x, y, vx, vy, ttl, isLaser, kind, dist: 0, maxDist: BULLET_RANGE_TILES });
+function fireEnemyBullet(x, y, vx, vy, ttl = 6, isLaser = false, kind = "blue", maxDist = BULLET_RANGE_TILES) {
+  S.enemyBullets.push({ x, y, vx, vy, ttl, isLaser, kind, dist: 0, maxDist });
 }
 
 function enemyBulletBreakAttachments(b) {
@@ -2690,12 +3314,14 @@ function updateEnemyGuns(dt) {
     const gunBoost = empowered ? e.pickGun : 0;
     const rapidBoost = empowered ? e.pickRapid : 0;
     const aiBoost = empowered ? e.pickAIGun : 0;
+    const purpleBoost = empowered ? e.pickPurple : 0;
+    const burstBoost = empowered ? e.pickBurst : 0;
     const facBoost = empowered ? e.pickFactory : 0;
     const swordBoost = empowered ? e.pickSword : 0;
-    const totalBoost = gunBoost + rapidBoost + aiBoost + facBoost + swordBoost;
+    const totalBoost = gunBoost + rapidBoost + aiBoost + purpleBoost + burstBoost + facBoost + swordBoost;
 
     if (e.shootCd <= 0) {
-      const rateMul = 1 + gunBoost * 0.16 + rapidBoost * 0.38 + aiBoost * 0.17 + facBoost * 0.12;
+      const rateMul = 1 + gunBoost * 0.16 + rapidBoost * 0.38 + aiBoost * 0.17 + purpleBoost * 0.22 + facBoost * 0.12;
       const baseCd = attachedMode ? Math.max(0.11, 0.7 / rateMul) : Math.max(0.28, 1.35 / rateMul);
       e.shootCd = baseCd + Math.random() * (attachedMode ? 0.28 : 0.95);
 
@@ -2713,11 +3339,11 @@ function updateEnemyGuns(dt) {
       const ny = ady / ad;
 
       const speed = attachedMode
-        ? 8.2 + gunBoost * 0.45 + rapidBoost * 0.38 + aiBoost * 0.56 + facBoost * 0.28
-        : 7.2 + gunBoost * 0.35 + rapidBoost * 0.25 + aiBoost * 0.42 + facBoost * 0.2;
+        ? 8.2 + gunBoost * 0.45 + rapidBoost * 0.38 + aiBoost * 0.56 + purpleBoost * 0.52 + facBoost * 0.28
+        : 7.2 + gunBoost * 0.35 + rapidBoost * 0.25 + aiBoost * 0.42 + purpleBoost * 0.36 + facBoost * 0.2;
 
       if (attachedMode && totalBoost > 0) {
-        const totalShots = Math.min(10, 1 + gunBoost + rapidBoost + Math.ceil(aiBoost * 0.8));
+        const totalShots = Math.min(10, 1 + gunBoost + rapidBoost + Math.ceil(aiBoost * 0.8) + Math.ceil(purpleBoost * 0.7));
         const spread = 0.05 + Math.min(0.2, totalShots * 0.012);
         const mid = (totalShots - 1) / 2;
         for (let i = 0; i < totalShots; i++) {
@@ -2744,6 +3370,19 @@ function updateEnemyGuns(dt) {
       for (let i = 0; i < ringShots; i++) {
         const a = (Math.PI * 2 * i) / ringShots;
         fireEnemyBullet(e.x, e.y, Math.cos(a) * burstSpeed, Math.sin(a) * burstSpeed, 5.2, false, "blue");
+      }
+    }
+
+    if (empowered && burstBoost > 0) {
+      e.burstCd -= dt;
+      if (e.burstCd <= 0) {
+        e.burstCd = Math.max(0.75, 2.4 / (1 + burstBoost * 0.42));
+        const ringShots = Math.min(30, 8 + burstBoost * 3);
+        const burstSpeed = 7 + burstBoost * 0.32;
+        for (let i = 0; i < ringShots; i++) {
+          const a = (Math.PI * 2 * i) / ringShots;
+          fireEnemyBullet(e.x, e.y, Math.cos(a) * burstSpeed, Math.sin(a) * burstSpeed, 4.9, false, "blue");
+        }
       }
     }
   }
@@ -2777,12 +3416,13 @@ function updateBoss(dt) {
     const dx = tx - b.x;
     const dy = ty - b.y;
     const d = Math.hypot(dx, dy) || 1;
-    b.vx += (dx / d) * 5.2 * dt;
-    b.vy += (dy / d) * 5.2 * dt;
+    const moveMul = b.moveMul || 1;
+    b.vx += (dx / d) * 5.2 * moveMul * dt;
+    b.vy += (dy / d) * 5.2 * moveMul * dt;
     const fScore = Math.exp(-2.25 * dt);
     b.vx *= fScore;
     b.vy *= fScore;
-    const maxScoreSp = 4.4;
+    const maxScoreSp = 4.4 * moveMul;
     const scoreSp = Math.hypot(b.vx, b.vy);
     if (scoreSp > maxScoreSp) {
       const k = maxScoreSp / scoreSp;
@@ -2805,20 +3445,22 @@ function updateBoss(dt) {
       const std = Math.hypot(stx, sty) || 1;
       const snx = stx / std;
       const sny = sty / std;
-      const speed = 11.8;
-      fireEnemyBullet(b.x, b.y, snx * speed, sny * speed, 6.5, false);
-      fireEnemyBullet(b.x, b.y, (snx - sny * 0.18) * speed, (sny + snx * 0.18) * speed, 6.5, false);
-      fireEnemyBullet(b.x, b.y, (snx + sny * 0.18) * speed, (sny - snx * 0.18) * speed, 6.5, false);
+      const speed = 11.8 * moveMul;
+      const range = b.bulletRange || BULLET_RANGE_TILES;
+      fireEnemyBullet(b.x, b.y, snx * speed, sny * speed, 6.5, false, "blue", range);
+      fireEnemyBullet(b.x, b.y, (snx - sny * 0.18) * speed, (sny + snx * 0.18) * speed, 6.5, false, "blue", range);
+      fireEnemyBullet(b.x, b.y, (snx + sny * 0.18) * speed, (sny - snx * 0.18) * speed, 6.5, false, "blue", range);
     }
 
     b.laserCd -= dt;
     if (b.laserCd <= 0) {
       b.laserCd = 0.9;
-      const ls = 10.5;
-      fireEnemyBullet(b.x, b.y, ls, 0, 3.2, true);
-      fireEnemyBullet(b.x, b.y, -ls, 0, 3.2, true);
-      fireEnemyBullet(b.x, b.y, 0, ls, 3.2, true);
-      fireEnemyBullet(b.x, b.y, 0, -ls, 3.2, true);
+      const ls = 10.5 * moveMul;
+      const lrange = b.bulletRange || BULLET_RANGE_TILES;
+      fireEnemyBullet(b.x, b.y, ls, 0, 3.2, true, "blue", lrange);
+      fireEnemyBullet(b.x, b.y, -ls, 0, 3.2, true, "blue", lrange);
+      fireEnemyBullet(b.x, b.y, 0, ls, 3.2, true, "blue", lrange);
+      fireEnemyBullet(b.x, b.y, 0, -ls, 3.2, true, "blue", lrange);
     }
     return;
   }
@@ -4015,41 +4657,42 @@ function findNearestRedMiniTarget(r) {
 
 function applyRedMiniDamage(target, dmg = 2) {
   if (!target) return;
+  const tdmg = dmg + attachmentDamageBonus();
   if (target.type === "blue") {
     const e = S.enemy[target.index];
     if (!e) return;
-    e.hp -= dmg;
+    e.hp -= tdmg;
     if (e.hp <= 0) destroyEnemyAt(target.index, "Blue cube destroyed by red mini.");
     return;
   }
   if (target.type === "yellow") {
     const e = S.yellow[target.index];
     if (!e) return;
-    e.hp -= dmg;
+    e.hp -= tdmg;
     if (e.hp <= 0) destroyYellowAt(target.index, "Yellow cube destroyed by red mini.");
     return;
   }
   if (target.type === "yellow-mini") {
     const e = S.yellowMini[target.index];
     if (!e) return;
-    e.hp -= dmg;
+    e.hp -= tdmg;
     if (e.hp <= 0) destroyYellowMiniAt(target.index, "Small yellow cube destroyed by red mini.");
     return;
   }
   if (target.type === "white") {
     const e = S.white[target.index];
     if (!e) return;
-    e.hp -= dmg;
+    e.hp -= tdmg;
     if (e.hp <= 0) destroyWhiteAt(target.index, "White cube destroyed by red mini.");
     return;
   }
   if (target.type === "green" && S.greenCube) {
-    S.greenCube.hp -= dmg;
+    S.greenCube.hp -= tdmg;
     if (S.greenCube.hp <= 0) destroyGreenCube("Green heavy cube destroyed by red mini.");
     return;
   }
   if (target.type === "boss" && S.boss) {
-    S.boss.hp -= dmg;
+    S.boss.hp -= tdmg;
     if (S.boss.hp <= 0) despawnBoss();
   }
 }
@@ -4165,12 +4808,22 @@ function updateRedMini(dt) {
 function updateRun(dt) {
   const prevPlayerX = S.p.x;
   const prevPlayerY = S.p.y;
+  updateWorkstation(dt);
+  const wsActive = workstationActive();
+
+  if (wsActive) {
+    if (S.gunCd > 0) S.gunCd -= dt;
+    if (S.bombCd > 0) S.bombCd -= dt;
+    if (S.aiGunCd > 0) S.aiGunCd -= dt;
+    if (S.burstCd > 0) S.burstCd -= dt;
+    return;
+  }
+
   const i = {
     left: !!(S.keys.ArrowLeft || S.keys.KeyA),
     right: !!(S.keys.ArrowRight || S.keys.KeyD),
     up: !!(S.keys.ArrowUp || S.keys.KeyW),
-    down: !!(S.keys.ArrowDown || S.keys.KeyS),
-    rocket: !!S.keys.ShiftLeft || !!S.keys.ShiftRight
+    down: !!(S.keys.ArrowDown || S.keys.KeyS)
   };
 
   const inBuildNow = buildZoneBlocksRun() && playerInBuildZone();
@@ -4185,11 +4838,6 @@ function updateRun(dt) {
   if (i.up && countMove("up")) ay -= base;
   if (i.down && countMove("down")) ay += base;
 
-  if (!inBuildNow && i.rocket) {
-    ax += (countRocket("right") - countRocket("left")) * 8.8;
-    ay += (countRocket("down") - countRocket("up")) * 8.8;
-  }
-
   S.p.vx += ax * dt;
   S.p.vy += ay * dt;
 
@@ -4198,7 +4846,7 @@ function updateRun(dt) {
   S.p.vx *= f;
   S.p.vy *= f;
 
-  const maxSp = 12 + (!inBuildNow ? countType("rocket") * 3 : 0) + (!inBuildNow && S.stabilizerPulse > 0 ? 3 : 0);
+  const maxSp = 12 + (!inBuildNow && S.stabilizerPulse > 0 ? 3 : 0);
   const sp = Math.hypot(S.p.vx, S.p.vy);
   if (sp > maxSp && sp > 0) {
     const k = maxSp / sp;
@@ -4220,12 +4868,15 @@ function updateRun(dt) {
   if (S.pistonCd > 0) S.pistonCd -= dt;
   if (S.sidePistonCd > 0) S.sidePistonCd -= dt;
   if (S.gunCd > 0) S.gunCd -= dt;
+  if (S.bombCd > 0) S.bombCd -= dt;
+  if (S.burstCd > 0) S.burstCd -= dt;
   if (S.pistonBounce > 0) S.pistonBounce -= dt;
   if (S.stabilizerPulse > 0) S.stabilizerPulse -= dt;
   if (S.stabilizerCd > 0) S.stabilizerCd -= dt;
   for (const side of SIDES) if (S.sideBreakCd[side] > 0) S.sideBreakCd[side] -= dt;
 
   S.levelTime += dt;
+  updateBombs(dt);
   updateGunBullets(dt);
   updateAIGuns(dt);
   updateLaserBullets(dt);
@@ -4273,6 +4924,43 @@ function updateRun(dt) {
 
 function update(dt) {
   if (S.phase === "run") updateRun(dt);
+  for (const side of SIDES) {
+    for (const m of S.a[side]) {
+      if (!Number.isFinite(m.pop)) continue;
+      m.pop = Math.max(0, m.pop - dt * 3.6);
+    }
+  }
+  for (let i = S.pickupFx.length - 1; i >= 0; i--) {
+    const fx = S.pickupFx[i];
+    fx.ttl -= dt;
+    fx.x += fx.vx * dt;
+    fx.y += fx.vy * dt;
+    fx.vx *= Math.exp(-3.2 * dt);
+    fx.vy *= Math.exp(-3.2 * dt);
+    if (fx.ttl <= 0) S.pickupFx.splice(i, 1);
+  }
+  for (let i = S.bossFx.length - 1; i >= 0; i--) {
+    const fx = S.bossFx[i];
+    fx.ttl -= dt;
+    fx.x += fx.vx * dt;
+    fx.y += fx.vy * dt;
+    fx.vx *= Math.exp(-1.7 * dt);
+    fx.vy *= Math.exp(-1.7 * dt);
+    if (fx.ttl <= 0) S.bossFx.splice(i, 1);
+  }
+  for (let i = S.enemyFx.length - 1; i >= 0; i--) {
+    const fx = S.enemyFx[i];
+    fx.ttl -= dt;
+    fx.x += fx.vx * dt;
+    fx.y += fx.vy * dt;
+    fx.vx *= Math.exp(-2.1 * dt);
+    fx.vy *= Math.exp(-2.1 * dt);
+    if (fx.ttl <= 0) S.enemyFx.splice(i, 1);
+  }
+  if (S.modeFlash) {
+    S.modeFlash.ttl -= dt;
+    if (S.modeFlash.ttl <= 0) S.modeFlash = null;
+  }
 }
 
 function cameraOffset() {
@@ -4292,7 +4980,7 @@ function cameraOffset() {
 }
 
 function drawBackground() {
-  ctx.fillStyle = S.darkTheme ? "#060b17" : "#cbd5e1";
+  ctx.fillStyle = S.darkTheme ? "#11100f" : "#d9cda3";
   ctx.fillRect(0, 0, ui.c.width, ui.c.height);
 }
 
@@ -4307,13 +4995,13 @@ function visibleScoreWallRange(cam) {
 
 function drawGrid() {
   if (S.phase !== "build" && S.buildZoneGone) return;
-  ctx.fillStyle = S.darkTheme ? "#334155" : "#9ca3af";
+  ctx.fillStyle = S.darkTheme ? "#3a2f24" : "#d8c98a";
   ctx.fillRect(BUILD.x * CELL, BUILD.y * CELL, BUILD.w * CELL, BUILD.h * CELL);
-  ctx.strokeStyle = S.darkTheme ? "rgba(226,232,240,0.92)" : "rgba(255,255,255,0.85)";
+  ctx.strokeStyle = S.darkTheme ? "rgba(235, 211, 170, 0.92)" : "rgba(47, 32, 20, 0.95)";
   ctx.lineWidth = 2;
   ctx.strokeRect(BUILD.x * CELL + 1, BUILD.y * CELL + 1, BUILD.w * CELL - 2, BUILD.h * CELL - 2);
 
-  ctx.strokeStyle = S.darkTheme ? "rgba(191, 219, 254, .4)" : "rgba(190, 205, 225, .55)";
+  ctx.strokeStyle = S.darkTheme ? "rgba(199, 164, 115, .38)" : "rgba(120, 85, 54, .45)";
   ctx.lineWidth = 1;
   for (let x = BUILD.x; x <= BUILD.x + BUILD.w; x++) {
     const sx = x * CELL + 0.5;
@@ -4346,9 +5034,9 @@ function drawSpawnPreview() {
   for (const s of S.previewSpawns) {
     const x = s.x * CELL;
     const y = s.y * CELL;
-    ctx.fillStyle = "rgba(125, 211, 252, 0.23)";
+    ctx.fillStyle = "rgba(251, 191, 156, 0.24)";
     ctx.fillRect(x + 2, y + 2, CELL - 4, CELL - 4);
-    ctx.strokeStyle = "rgba(56, 189, 248, 0.95)";
+    ctx.strokeStyle = "rgba(120, 71, 46, 0.95)";
     ctx.lineWidth = 1.4;
     ctx.strokeRect(x + 2, y + 2, CELL - 4, CELL - 4);
   }
@@ -4387,8 +5075,8 @@ function drawGoal() {
 }
 
 function drawWalls() {
-  const wallBase = S.darkTheme ? "#94a3b8" : "#374151";
-  const wallInset = S.darkTheme ? "rgba(15,23,42,.24)" : "rgba(255,255,255,.08)";
+  const wallBase = S.darkTheme ? "#6b7280" : "#4b5563";
+  const wallInset = S.darkTheme ? "rgba(15,23,42,.28)" : "rgba(255,255,255,.08)";
   if (isScoreMode()) {
     if (S.phase === "build" || S.phase === "menu") return;
     const cam = cameraOffset();
@@ -4469,9 +5157,13 @@ function drawLasers() {
 
 function drawGunBullets() {
   for (const b of S.gunBullets) {
+    const purple = b.kind === "purple";
+    const burst = b.kind === "burst";
+    const fill = purple ? "rgba(168, 85, 247, 0.95)" : burst ? "rgba(201, 162, 107, 0.95)" : "rgba(80, 250, 140, 0.95)";
+    const glow = purple ? "rgba(147, 51, 234, 0.6)" : burst ? "rgba(146, 114, 73, 0.55)" : "rgba(34, 197, 94, 0.55)";
     ctx.save();
-    ctx.fillStyle = "rgba(80, 250, 140, 0.95)";
-    ctx.shadowColor = "rgba(34, 197, 94, 0.55)";
+    ctx.fillStyle = fill;
+    ctx.shadowColor = glow;
     ctx.shadowBlur = 6;
     ctx.beginPath();
     ctx.arc(b.x * CELL, b.y * CELL, 3.2, 0, Math.PI * 2);
@@ -4513,7 +5205,7 @@ function drawMini(m, x, y, s) {
   ctx.fillStyle = MCOL[m.type] || "#6b7280";
   ctx.fillRect(x, y, s, s);
   ctx.fillStyle = "rgba(255,255,255,.92)";
-  ctx.font = Math.max(8, Math.floor(s * 0.6)) + "px Segoe UI";
+  ctx.font = Math.max(8, Math.floor(s * 0.6)) + "px Rockwell, serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   let t = "";
@@ -4523,11 +5215,13 @@ function drawMini(m, x, y, s) {
     if (m.dir === "up") t = "U";
     if (m.dir === "down") t = "D";
   } else if (m.type === "gun") t = "G";
+  else if (m.type === "upgrade") t = "U";
+  else if (m.type === "bomb") t = "B";
   else if (m.type === "ai-gun") t = "A";
   else if (m.type === "rapid-gun") t = "2";
+  else if (m.type === "purple-gun") t = "P";
+  else if (m.type === "burst") t = "B";
   else if (m.type === "factory") t = "F";
-  else if (m.type === "rocket") t = "R";
-  else if (m.type === "piston") t = "P";
   else t = "S";
   ctx.fillText(t, x + s / 2, y + s / 2 + 0.5);
 }
@@ -4540,6 +5234,8 @@ function drawDrops() {
     if (d.type === "sword") color = "#dc2626";
     if (d.type === "rapid-gun") color = "#eab308";
     if (d.type === "factory") color = "#ef4444";
+    if (d.type === "purple-gun") color = "#9333ea";
+    if (d.type === "burst") color = "#c9a26b";
     const x = d.x * CELL - 7;
     const y = d.y * CELL - 7;
     ctx.fillStyle = color;
@@ -4553,12 +5249,37 @@ function drawDrops() {
       ctx.strokeRect(x + 0.5, y + 0.5, 13, 13);
       if (d.type === "factory") {
         ctx.fillStyle = "rgba(15,23,42,.78)";
-        ctx.font = "700 9px Segoe UI";
+        ctx.font = "700 9px Rockwell, serif";
         ctx.textAlign = "center";
         ctx.textBaseline = "middle";
         ctx.fillText("F", x + 7, y + 7.5);
       }
     }
+  }
+}
+
+function drawBombs() {
+  if (S.phase !== "run") return;
+  for (const b of S.bombs) {
+    const x = b.x * CELL;
+    const y = b.y * CELL;
+    const armed = b.arm <= 0;
+    ctx.save();
+    ctx.fillStyle = armed ? "rgba(239, 68, 68, 0.95)" : "rgba(107, 114, 128, 0.95)";
+    ctx.strokeStyle = "rgba(15, 23, 42, 0.8)";
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(x, y, 6.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+    if (!armed) {
+      ctx.strokeStyle = "rgba(251, 191, 36, 0.8)";
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.arc(x, y, 8.8, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+    ctx.restore();
   }
 }
 
@@ -4604,16 +5325,89 @@ function drawAttach() {
     for (let i = 0; i < mods.length; i++) {
       const a = sideAttachmentAnchor(side, i + 1);
       const s = S.p.size * CELL;
-      const cx = a.x * CELL - s / 2;
-      const cy = a.y * CELL - s / 2;
-      drawMini(mods[i], cx, cy, s);
+      const pop = Math.max(0, mods[i].pop || 0);
+      const scale = 1 + pop * 0.24;
+      const cs = s * scale;
+      const cx = a.x * CELL - cs / 2;
+      const cy = a.y * CELL - cs / 2;
+      drawMini(mods[i], cx, cy, cs);
       if (S.phase === "build") {
-        ctx.strokeStyle = "rgba(14,165,233,.95)";
+        ctx.strokeStyle = "rgba(120, 71, 46, 0.95)";
         ctx.lineWidth = 1.4;
-        ctx.strokeRect(cx + 1, cy + 1, s - 2, s - 2);
+        ctx.strokeRect(cx + 1, cy + 1, cs - 2, cs - 2);
       }
     }
   }
+
+  if (S.drag) {
+    const s = S.p.size * CELL;
+    const cx = S.mouse.x * CELL - s / 2;
+    const cy = S.mouse.y * CELL - s / 2;
+    ctx.globalAlpha = 0.78;
+    drawMini(S.drag.mod, cx, cy, s);
+    ctx.globalAlpha = 1;
+  }
+}
+
+function drawWorkstation() {
+  if (!S.workstation || S.phase !== "run" || !isScoreMode()) return;
+  const r = workstationRect(S.workstation);
+  if (!r) return;
+  const fill = S.darkTheme ? "rgba(161, 98, 7, 0.26)" : "rgba(253, 224, 71, 0.26)";
+  const line = S.darkTheme ? "rgba(245, 158, 11, 0.55)" : "rgba(202, 138, 4, 0.55)";
+  ctx.fillStyle = fill;
+  ctx.fillRect(r.x * CELL, r.y * CELL, r.w * CELL, r.h * CELL);
+  ctx.strokeStyle = line;
+  ctx.lineWidth = 2;
+  ctx.strokeRect(r.x * CELL + 1, r.y * CELL + 1, r.w * CELL - 2, r.h * CELL - 2);
+  ctx.lineWidth = 1;
+  for (let x = r.x; x <= r.x + r.w; x++) {
+    const sx = x * CELL + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(sx, r.y * CELL);
+    ctx.lineTo(sx, (r.y + r.h) * CELL);
+    ctx.stroke();
+  }
+  for (let y = r.y; y <= r.y + r.h; y++) {
+    const sy = y * CELL + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(r.x * CELL, sy);
+    ctx.lineTo((r.x + r.w) * CELL, sy);
+    ctx.stroke();
+  }
+
+  if (S.workstation.entered) {
+    ctx.fillStyle = S.darkTheme ? "#fbbf24" : "#92400e";
+    ctx.font = "700 14px Rockwell, serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillText("Workstation: Drag attachments (" + Math.max(0, S.workstation.ttl).toFixed(1) + "s)  Exit: E", S.workstation.x * CELL, (r.y - 0.2) * CELL);
+  }
+}
+
+function drawFxParticles() {
+  for (const fx of S.pickupFx) {
+    const p = Math.max(0, fx.ttl / (fx.maxTtl || 0.62));
+    ctx.globalAlpha = p;
+    ctx.fillStyle = fx.color;
+    const s = fx.size * (0.7 + (1 - p) * 0.65);
+    ctx.fillRect(fx.x * CELL - s / 2, fx.y * CELL - s / 2, s, s);
+  }
+  for (const fx of S.bossFx) {
+    const p = Math.max(0, fx.ttl / (fx.maxTtl || 1));
+    ctx.globalAlpha = p;
+    ctx.fillStyle = fx.color;
+    const s = fx.size * (0.8 + (1 - p) * 0.8);
+    ctx.fillRect(fx.x * CELL - s / 2, fx.y * CELL - s / 2, s, s);
+  }
+  for (const fx of S.enemyFx) {
+    const p = Math.max(0, fx.ttl / (fx.maxTtl || 0.25));
+    ctx.globalAlpha = p;
+    ctx.fillStyle = fx.color;
+    const s = fx.size * (0.86 + (1 - p) * 0.5);
+    ctx.fillRect(fx.x * CELL - s / 2, fx.y * CELL - s / 2, s, s);
+  }
+  ctx.globalAlpha = 1;
 }
 
 function drawRedCube() {
@@ -4689,6 +5483,8 @@ function drawEnemy() {
       for (let i = 0; i < (e.pickGun || 0); i++) mods.push("gun");
       for (let i = 0; i < (e.pickAIGun || 0); i++) mods.push("ai-gun");
       for (let i = 0; i < (e.pickRapid || 0); i++) mods.push("rapid-gun");
+      for (let i = 0; i < (e.pickPurple || 0); i++) mods.push("purple-gun");
+      for (let i = 0; i < (e.pickBurst || 0); i++) mods.push("burst");
       for (let i = 0; i < (e.pickFactory || 0); i++) mods.push("factory");
       const slots = [
         [0, -1], [1, 0], [0, 1], [-1, 0],
@@ -4702,6 +5498,8 @@ function drawEnemy() {
         let c = "#22c55e";
         if (mods[i] === "ai-gun") c = "#166534";
         else if (mods[i] === "rapid-gun") c = "#eab308";
+        else if (mods[i] === "purple-gun") c = "#9333ea";
+        else if (mods[i] === "burst") c = "#c9a26b";
         else if (mods[i] === "factory") c = "#ef4444";
         ctx.fillStyle = c;
         ctx.fillRect(mx, my, ms, ms);
@@ -4878,18 +5676,105 @@ function drawBoss() {
   ctx.fillRect(px + 0.5, py - 11.5, (bw - 1) * ratio, bh - 1);
 }
 
+function workstationStatusText() {
+  if (!isScoreMode()) return "";
+  if (S.workstation) {
+    if (S.workstation.entered) return "WS: Editing (" + Math.max(0, S.workstation.ttl).toFixed(1) + "s)";
+    const d = Math.hypot(S.workstation.x - S.p.x, S.workstation.y - S.p.y);
+    return "WS: " + d.toFixed(1) + " tiles";
+  }
+  const moved = Math.hypot(S.p.x - S.workRefX, S.p.y - S.workRefY);
+  const remain = Math.max(0, WORKSTATION_GAP - moved);
+  return "WS In: " + remain.toFixed(0) + " tiles";
+}
+
+function drawScoreAttachmentHud() {
+  if (!isScoreMode() || S.phase !== "run") return;
+  const entries = [];
+  if (gunModules().length) entries.push({ type: "gun", label: "Gun (G)", ready: S.gunCd <= 0, cd: S.gunCd });
+  if (purpleGunModules().length) entries.push({ type: "purple-gun", label: "Purple (Click)", ready: true, cd: 0 });
+  if (burstModules().length) entries.push({ type: "burst", label: "Burst (F)", ready: S.burstCd <= 0, cd: S.burstCd });
+  if (bombModules().length) entries.push({ type: "bomb", label: "Bomb (B)", ready: S.bombCd <= 0, cd: S.bombCd });
+  if (hasUpgradeAttachment()) entries.push({ type: "upgrade", label: "Upgrade", ready: true, cd: 0 });
+  if (S.swordCount > 0) entries.push({ type: "factory", label: "Sword x" + S.swordCount, ready: true, cd: 0 });
+  if (factoryModules().length) entries.push({ type: "factory", label: "Factory", ready: true, cd: 0 });
+  if (!entries.length) return;
+
+  const y = ui.c.height - 64;
+  const w = Math.min(ui.c.width - 20, entries.length * 120 + 12);
+  const x = ui.c.width / 2 - w / 2;
+  ctx.fillStyle = "rgba(15,23,42,0.52)";
+  ctx.fillRect(x, y, w, 54);
+  ctx.strokeStyle = "rgba(255,255,255,0.2)";
+  ctx.lineWidth = 1;
+  ctx.strokeRect(x + 0.5, y + 0.5, w - 1, 53);
+
+  let ox = x + 8;
+  for (const e of entries) {
+    const color = MCOL[e.type] || "#94a3b8";
+    const active = e.ready;
+    ctx.globalAlpha = active ? 1 : 0.4;
+    ctx.fillStyle = color;
+    ctx.fillRect(ox, y + 8, 18, 18);
+    ctx.strokeStyle = "rgba(15,23,42,0.75)";
+    ctx.strokeRect(ox + 0.5, y + 8.5, 17, 17);
+    ctx.globalAlpha = 1;
+    ctx.fillStyle = S.darkTheme ? "#f8fafc" : "#111827";
+    ctx.font = "700 11px Rockwell, serif";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText(e.label, ox + 24, y + 8);
+    const cdTxt = e.cd > 0 ? e.cd.toFixed(1) + "s" : "Ready";
+    ctx.fillStyle = active ? "#d1fae5" : "#fecaca";
+    ctx.font = "700 10px Rockwell, serif";
+    ctx.fillText(cdTxt, ox + 24, y + 24);
+    ox += 118;
+  }
+
+  const collected = [
+    ["gun", S.collectedDrops.gun || 0],
+    ["ai-gun", S.collectedDrops["ai-gun"] || 0],
+    ["rapid-gun", S.collectedDrops["rapid-gun"] || 0],
+    ["purple-gun", S.collectedDrops["purple-gun"] || 0],
+    ["burst", S.collectedDrops.burst || 0],
+    ["factory", S.collectedDrops.factory || 0],
+    ["sword", S.collectedDrops.sword || 0]
+  ];
+  const by = y + 56;
+  let bx = 14;
+  ctx.fillStyle = S.darkTheme ? "#cbd5e1" : "#111827";
+  ctx.font = "700 11px Rockwell, serif";
+  ctx.textAlign = "left";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Picked:", bx, by);
+  bx += 50;
+  for (const [type, val] of collected) {
+    if (!val) continue;
+    ctx.fillStyle = dropColor(type);
+    ctx.fillRect(bx, by - 7, 12, 12);
+    ctx.strokeStyle = "rgba(15,23,42,0.7)";
+    ctx.strokeRect(bx + 0.5, by - 6.5, 11, 11);
+    ctx.fillStyle = S.darkTheme ? "#f8fafc" : "#111827";
+    ctx.fillText(String(val), bx + 16, by);
+    bx += 42;
+  }
+}
+
 function drawMeter() {
   if (isScoreMode()) {
     const nextDrop = Math.max(0, S.dropSpawnCd).toFixed(1) + "s";
     const incoming = S.dropTelegraphs.length ? " (Incoming)" : "";
-    const txt = "Score: " + S.score + "  |  Best: " + S.bestScore + "  |  Next Boss: " + S.nextBossScore + "  |  Next Drop: " + nextDrop + incoming;
+    const upg = hasUpgradeAttachment() ? "  |  Upgrade +" + attachmentDamageBonus().toFixed(2) : "";
+    const ws = "  |  " + workstationStatusText();
+    const txt = "Score: " + S.score + "  |  Best: " + S.bestScore + "  |  Next Boss: " + S.nextBossScore + "  |  Next Drop: " + nextDrop + incoming + upg + ws;
     ctx.fillStyle = "rgba(17,24,39,.55)";
-    ctx.fillRect(10, 8, 760, 22);
+    ctx.fillRect(10, 8, Math.min(ui.c.width - 20, 980), 24);
     ctx.fillStyle = "#f8fafc";
-    ctx.font = "700 13px Segoe UI";
+    ctx.font = "700 13px Rockwell, serif";
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.fillText(txt, 16, 19);
+    ctx.fillText(txt, 16, 20);
+    drawScoreAttachmentHud();
     return;
   }
   const r = Math.min(1, S.hold / GOAL_TIME);
@@ -4902,7 +5787,7 @@ function drawMeter() {
   ctx.fillStyle = "rgba(255,255,255,.9)";
   ctx.fillRect(x + 1, y + 1, (w - 2) * r, h - 2);
   ctx.fillStyle = "#111827";
-  ctx.font = "12px Segoe UI";
+  ctx.font = "12px Rockwell, serif";
   ctx.textAlign = "left";
   ctx.textBaseline = "top";
   ctx.fillText("Goal hold: " + S.hold.toFixed(1) + " / 5.0s", x, y + h + 4);
@@ -4921,10 +5806,26 @@ function drawOverlay(text1, text2, color = "rgba(17,24,39,.78)") {
   ctx.fillStyle = "#f9fafb";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.font = "700 28px Segoe UI";
+  ctx.font = "700 28px Rockwell, serif";
   ctx.fillText(text1, ui.c.width / 2, y + 45);
-  ctx.font = "600 16px Segoe UI";
+  ctx.font = "600 16px Rockwell, serif";
   ctx.fillText(text2, ui.c.width / 2, y + 85);
+}
+
+function drawModeFlash() {
+  if (!S.modeFlash) return;
+  const p = Math.max(0, Math.min(1, S.modeFlash.ttl / S.modeFlash.maxTtl));
+  const t = 1 - p;
+  const size = Math.max(ui.c.width, ui.c.height) * (1.35 - t * 1.05);
+  const alpha = (0.55 * p).toFixed(3);
+  ctx.save();
+  ctx.translate(ui.c.width / 2, ui.c.height / 2);
+  ctx.fillStyle = "rgba(251, 191, 156, " + alpha + ")";
+  ctx.strokeStyle = "rgba(0, 0, 0, " + alpha + ")";
+  ctx.lineWidth = 6;
+  ctx.fillRect(-size / 2, -size / 2, size, size);
+  ctx.strokeRect(-size / 2, -size / 2, size, size);
+  ctx.restore();
 }
 
 function render() {
@@ -4944,8 +5845,10 @@ function render() {
   drawHints();
   if (!isScoreMode()) drawGoal();
   drawWalls();
+  drawWorkstation();
   drawDropTelegraphs();
   drawDrops();
+  drawBombs();
   drawSpawnPreview();
   drawSpawners();
   drawLasers();
@@ -4960,9 +5863,11 @@ function render() {
   drawGreenCube();
   drawRedMiniCubes();
   drawBoss();
+  drawFxParticles();
   drawRedCube();
   ctx.restore();
   drawMeter();
+  drawModeFlash();
 
   if (!isScoreMode() && S.phase === "complete") {
     drawOverlay("Level " + (S.i + 1) + " Complete", S.i + 1 < LEVELS ? "Press Next Level to continue." : "All levels complete.");
@@ -5006,13 +5911,14 @@ function updUI() {
     ui.level.textContent = "Mode: Score Arena";
     const nextDrop = Math.max(0, S.dropSpawnCd).toFixed(1) + "s";
     const incoming = S.dropTelegraphs.length ? " (Incoming)" : "";
-    ui.goal.textContent = "Score: " + S.score + " | Next Boss: " + S.nextBossScore + " | Next Drop: " + nextDrop + incoming;
+    ui.goal.textContent = "Score: " + S.score + " | Next Boss: " + S.nextBossScore + " | Next Drop: " + nextDrop + incoming + " | " + workstationStatusText();
   } else {
     ui.level.textContent = "Level: " + n + " / " + LEVELS;
     ui.goal.textContent = "Goal Hold: " + S.hold.toFixed(1) + " / 5.0s";
   }
   ui.speed.textContent = "Speed: " + Math.hypot(S.p.vx, S.p.vy).toFixed(2);
   if (ui.update) ui.update.textContent = "Update: " + UPDATE_VERSION;
+  if (ui.wsExit) ui.wsExit.style.display = workstationActive() ? "inline-flex" : "none";
 
   ui.status.textContent = HELP[S.tool] + (S.msg ? " " + S.msg : "");
 
@@ -5022,11 +5928,22 @@ function updUI() {
     const lines = [];
     for (const sd of SIDES) {
       const txt = S.a[sd]
-        .map((m) => (m.type === "move" ? "move:" + m.dir : m.type === "gun" ? "gun:" + m.dir : m.type === "ai-gun" ? "ai-gun" : m.type === "rapid-gun" ? "rapid-gun:" + m.dir : m.type === "factory" ? "factory" : m.type === "rocket" ? "rocket:" + m.dir : m.type === "piston" ? "piston:" + m.dir : "stabilizer"))
+        .map((m) => (
+          m.type === "move" ? "move:" + m.dir
+            : m.type === "gun" ? "gun:" + m.dir
+              : m.type === "ai-gun" ? "ai-gun"
+                : m.type === "rapid-gun" ? "rapid-gun:" + m.dir
+                  : m.type === "purple-gun" ? "purple-gun"
+                  : m.type === "burst" ? "burst"
+                      : m.type === "upgrade" ? "upgrade"
+                        : m.type === "factory" ? "factory"
+                          : m.type === "bomb" ? "bomb"
+                            : "stabilizer"
+        ))
         .join(", ");
       lines.push(sd.toUpperCase() + " -> " + (txt || "none"));
     }
-    lines.push("Controls: G guns | Shift rockets | Space pistons | Q/E/F/V directional pistons | C stabilizer pulse");
+    lines.push("Controls: G guns | Left Click purple-gun aim | F burst | B bomb | C stabilizer pulse | E exit workstation");
     ui.readout.textContent = lines.join("\n");
   }
 
@@ -5056,6 +5973,7 @@ function toolButtons() {
 }
 
 function clickCanvas(e) {
+  if (S.phase !== "build") return;
   const r = ui.c.getBoundingClientRect();
   const sx = ui.c.width / r.width;
   const sy = ui.c.height / r.height;
@@ -5074,17 +5992,63 @@ function clickCanvas(e) {
   updUI();
 }
 
+function pointerWorld(e) {
+  const r = ui.c.getBoundingClientRect();
+  const sx = ui.c.width / r.width;
+  const sy = ui.c.height / r.height;
+  const cam = cameraOffset();
+  const zoom = buildZoom();
+  const px = (e.clientX - r.left) * sx;
+  const py = (e.clientY - r.top) * sy;
+  const cx = ui.c.width / 2;
+  const cy = ui.c.height / 2;
+  const worldX = (((px - cx) / zoom) + cx - cam.x) / CELL;
+  const worldY = (((py - cy) / zoom) + cy - cam.y) / CELL;
+  return { x: worldX, y: worldY };
+}
+
+function onMouseMove(e) {
+  const w = pointerWorld(e);
+  S.mouse.x = w.x;
+  S.mouse.y = w.y;
+}
+
+function onMouseDown(e) {
+  if (e.button !== 0) return;
+  const w = pointerWorld(e);
+  S.mouse.x = w.x;
+  S.mouse.y = w.y;
+  S.mouse.down = true;
+  if (workstationActive()) {
+    beginAttachmentDrag(w.x, w.y);
+    return;
+  }
+  if (S.phase === "run") {
+    firePurpleGunsAt(w.x, w.y);
+  }
+}
+
+function onMouseUp(e) {
+  if (e.button !== 0) return;
+  const w = pointerWorld(e);
+  S.mouse.x = w.x;
+  S.mouse.y = w.y;
+  S.mouse.down = false;
+  if (workstationActive()) endAttachmentDrag(w.x, w.y);
+}
+
 function onDown(e) {
-  const tracked = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "KeyA", "KeyD", "KeyW", "KeyS", "KeyR", "KeyQ", "KeyE", "KeyF", "KeyV", "KeyC", "KeyG", "Space", "Enter", "ShiftLeft", "ShiftRight"];
+  const tracked = ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "KeyA", "KeyD", "KeyW", "KeyS", "KeyR", "KeyE", "KeyF", "KeyC", "KeyG", "KeyB", "Enter"];
   if (tracked.includes(e.code)) e.preventDefault();
   S.keys[e.code] = true;
 
-  if (e.code === "Space") firePistons();
-  if (e.code === "KeyQ") firePistons("left");
-  if (e.code === "KeyE") firePistons("right");
-  if (e.code === "KeyF") firePistons("up");
-  if (e.code === "KeyV") firePistons("down");
+  if (e.code === "KeyE" && workstationActive()) {
+    endWorkstation("Workstation exited by player.");
+    return;
+  }
+  if (e.code === "KeyF") fireBurstAttachments();
   if (e.code === "KeyC") triggerStabilizerPulse();
+  if (e.code === "KeyB") fireBombAttachment();
   if (e.code === "KeyG" && !e.repeat) fireGuns();
   if (e.code === "KeyR") restart();
   if (e.code === "Enter" && S.phase === "build") startRun();
@@ -5127,14 +6091,42 @@ function loadSave() {
 
 function bind() {
   ui.c.addEventListener("click", clickCanvas);
+  ui.c.addEventListener("mousemove", onMouseMove);
+  ui.c.addEventListener("mousedown", onMouseDown);
+  ui.c.addEventListener("mouseup", onMouseUp);
+  ui.c.addEventListener("mouseleave", () => {
+    S.mouse.down = false;
+    if (S.drag && workstationActive()) endAttachmentDrag(S.mouse.x, S.mouse.y);
+  });
   ui.start.addEventListener("click", startRun);
   ui.build.addEventListener("click", backBuild);
   ui.restart.addEventListener("click", restart);
+  if (ui.wsExit) {
+    ui.wsExit.addEventListener("click", () => {
+      if (workstationActive()) endWorkstation("Workstation exited by player.");
+    });
+  }
   ui.next.addEventListener("click", () => {
     if (S.i + 1 < LEVELS && S.unlock > S.i + 1) loadLevel(S.i + 1);
   });
-  ui.startGame.addEventListener("click", () => startLevelMode());
-  ui.startScore.addEventListener("click", () => startScoreMode());
+  if (ui.menuPlay) ui.menuPlay.addEventListener("click", () => {
+    showMenuView("modes");
+    if (ui.menuSettingsPanel) ui.menuSettingsPanel.classList.add("hidden");
+  });
+  if (ui.menuBack) ui.menuBack.addEventListener("click", () => showMenuView("home"));
+  if (ui.menuSettings && ui.menuSettingsPanel) {
+    ui.menuSettings.addEventListener("click", () => {
+      ui.menuSettingsPanel.classList.toggle("hidden");
+    });
+  }
+  ui.startGame.addEventListener("click", () => {
+    S.modeFlash = { ttl: 0.25, maxTtl: 0.25 };
+    startLevelMode();
+  });
+  ui.startScore.addEventListener("click", () => {
+    S.modeFlash = { ttl: 0.25, maxTtl: 0.25 };
+    startScoreMode();
+  });
   if (ui.darkTheme) {
     ui.darkTheme.addEventListener("change", () => {
       S.darkTheme = !!ui.darkTheme.checked;
@@ -5150,6 +6142,7 @@ function bind() {
 function boot() {
   loadSave();
   applyTheme();
+  showMenuView("home");
   setBuildZoneForMode("levels");
   initLevels();
   toolButtons();
